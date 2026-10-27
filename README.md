@@ -1,4 +1,4 @@
-# Digital Signage — MVP local (étapes 1-2 : dépôt + API)
+# Digital Signage — MVP local 
 
 ## Démarrage sur NixOS
 ```bash
@@ -21,11 +21,3 @@ curl -sH "$A" -H 'Content-Type: application/json' -d '{"name":"Entrée"}' $U/api
 curl -sH "$A" -H 'Content-Type: application/json' -d '{"version_id":1}' $U/api/screens/1/assign
 curl -sH "Authorization: Bearer <jeton-écran>" $U/api/player/manifest
 ```
-
-## Décisions
-- Version immuable = instantané JSON du manifeste (URL, SHA-256, taille de chaque média).
-- Retour arrière = réaffecter une version antérieure à l'écran.
-- Jetons d'écran stockés hachés (SHA-256), rotation et révocation individuelles.
-- `/files/<sha256>.<ext>` non authentifié (noms non devinables) : à remplacer par URL signées (étape 7).
-- Jeton admin unique provisoire : comptes et rôles à l'étape 7.
-- Interface web : http://127.0.0.1:8000/admin/ (HTML/JS sans build, servie par l'API).

@@ -1,0 +1,14 @@
+# Essai local en conteneur (SQLite). Accessible uniquement depuis cette machine.
+name: TTscreen
+services:
+  api:
+    build: { context: .., dockerfile: deploy/Dockerfile }
+    environment:
+      SIGNAGE_ADMIN_TOKEN: ${SIGNAGE_ADMIN_TOKEN:-dev-admin-token}
+    volumes:
+      - data:/data
+    ports:
+      - "127.0.0.1:8000:8000"
+    restart: unless-stopped
+volumes:
+  data:

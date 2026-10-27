@@ -1,0 +1,55 @@
+# Production : PostgreSQL + API + Caddy (HTTPS automatique). Variables dans deploy/.env (jamais dans Git).
+name: TTscreen
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: signage
+      POSTGRES_DB: signage
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?définir POSTGRES_PASSWORD dans deploy/.env}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U signage -d signage"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  api:
+    build: { context: .., dockerfile: deploy/Dockerfile }
+    environment:
+      SIGNAGE_ENV: production
+      SIGNAGE_ADMIN_TOKEN: ${SIGNAGE_ADMIN_TOKEN:?définir SIGNAGE_ADMIN_TOKEN dans deploy/.env}
+      SIGNAGE_DATABASE_URL: postgresql+psycopg://signage:${POSTGRES_PASSWORD}@db:5432/signage
+    volumes:
+      - media:/data/media
+    depends_on:
+      db: { condition: service_healthy }
+    expose: ["8000"]
+    read_only: true
+    tmpfs: ["/tmp"]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2-alpine
+    environment:
+      DOMAIN: ${DOMAIN:?définir DOMAIN dans deploy/.env}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - media:/srv/media:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on: [api]
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  media:
+  caddy_data:
+  caddy_config:

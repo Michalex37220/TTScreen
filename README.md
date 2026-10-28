@@ -1,5 +1,7 @@
 # TTscreen
 
+> Dépôt : <https://github.com/Michalex37220/TTScreen>
+
 **Un système d'affichage dynamique, gratuit et open source, créé pour un club de Tennis de Table.**
 
 TTscreen permet de gérer à distance entre 2 et 20 écrans depuis une interface web : vous déposez vos images et vidéos, composez une playlist (texte, images, vidéos), la prévisualisez, la publiez, puis choisissez sur quels écrans la diffuser. Chaque écran joue sa playlist en boucle et se met à jour tout seul.
@@ -257,19 +259,19 @@ Activation : `systemctl --user enable --now ttscreen.service`. Ne laissez pas le
 
 Documentation interactive générée automatiquement : **`/docs`** (Swagger) et **`/openapi.json`**. Les messages d'erreur sont en français.
 
-### Authentification
+#### Authentification
 
-| Type | En-tête | Où |
-|---|---|---|
-| Administrateur | `Authorization: Bearer <SIGNAGE_ADMIN_TOKEN>` | Toutes les routes `/api/...` sauf `/api/health` et `/api/player/...` |
+| Type | En-tête | Utilisé pour |
+| :--- | :------ | :----------- |
+| Administrateur | `Authorization: Bearer <SIGNAGE_ADMIN_TOKEN>` | Toutes les routes `/api/...` sauf `/api/health` et `/api/player/manifest` |
 | Écran | `Authorization: Bearer <jeton de l'écran>` | `/api/player/manifest` uniquement |
 
-Un jeton d'écran ne donne **aucun** accès aux routes d'administration. Les jetons d'écran sont stockés hachés (SHA-256) : ils ne peuvent pas être relus après leur création.
+Un jeton d'écran ne donne **aucun** accès aux routes d'administration. Les jetons d'écran sont stockés hachés (SHA-256) : ils ne peuvent plus être relus après leur création.
 
-### Codes de réponse
+#### Codes de réponse
 
 | Code | Signification |
-|---|---|
+| :--- | :------------ |
 | `200` / `201` / `204` | Succès / créé / succès sans contenu |
 | `400` | Fichier vide |
 | `401` | Jeton absent, invalide ou révoqué |
@@ -277,29 +279,47 @@ Un jeton d'écran ne donne **aucun** accès aux routes d'administration. Les jet
 | `409` | Conflit : média ou playlist encore utilisé |
 | `413` | Fichier trop volumineux |
 | `415` | Type de fichier non autorisé |
-| `422` | Données invalides (le champ `detail` explique pourquoi) |
+| `422` | Données invalides |
 
 Format d'erreur : `{"detail": "Message"}`. Pour un `422` de validation, `detail` peut être une liste d'objets contenant un champ `msg`.
 
-### Santé et fichiers (publics)
+### Santé et fichiers
 
-| Méthode | Route | Description |
-|---|---|---|
-| `GET` | `/api/health` | Renvoie `{"status":"ok"}`. Sert au healthcheck. |
-| `GET` | `/files/{nom_stocké}` | Télécharge un média. Le nom est `<sha256>.<extension>`. Non authentifié (nom non devinable), en-tête `X-Content-Type-Options: nosniff`. |
-| `GET` | `/` | Redirige vers `/admin/`. |
+#### Vérifier l'état du serveur
+
+```http
+  GET /api/health
+```
+
+Aucun paramètre, aucune authentification. Renvoie `{"status": "ok"}`.
+
+#### Télécharger un média
+
+```http
+  GET /files/${stored_name}
+```
+
+| Parameter     | Type     | Description                                                                 |
+| :------------ | :------- | :-------------------------------------------------------------------------- |
+| `stored_name` | `string` | **Required**. Nom du fichier : `<sha256>.<extension>` (voir le champ `url`) |
+
+Non authentifié (le nom n'est pas devinable). Réponse avec l'en-tête `X-Content-Type-Options: nosniff`.
 
 ### Médias
 
-| Méthode | Route | Description |
-|---|---|---|
-| `POST` | `/api/media` | Téléverse un fichier (`multipart/form-data`, champ **`file`**). |
-| `GET` | `/api/media` | Liste les médias, du plus récent au plus ancien. |
-| `DELETE` | `/api/media/{id}` | Supprime un média. `409` s'il est utilisé dans une playlist ou une version publiée. |
+#### Téléverser un média
 
-Formats acceptés (détectés d'après le contenu) : PNG, JPEG, WebP, GIF, MP4, WebM. Un fichier déjà présent (même SHA-256) renvoie le média existant.
+```http
+  POST /api/media
+```
 
-Réponse (`MediaOut`) :
+| Parameter       | Type     | Description                                                                                     |
+| :-------------- | :------- | :---------------------------------------------------------------------------------------------- |
+| `Authorization` | `string` | **Required**. En-tête `Bearer <SIGNAGE_ADMIN_TOKEN>`                                            |
+| `file`          | `file`   | **Required**. PNG, JPEG, WebP, GIF, MP4 ou WebM (`multipart/form-data`, 200 Mo max par défaut) |
+
+Le type est détecté d'après le contenu du fichier, pas son extension. Un fichier déjà présent (même SHA-256) renvoie le média existant.
+
 ```json
 {
   "id": 1,
@@ -312,26 +332,116 @@ Réponse (`MediaOut`) :
 }
 ```
 
+```bash
+curl -H "$A" -F file=@photo.jpg $U/api/media
+```
+
+#### Lister les médias
+
+```http
+  GET /api/media
+```
+
+| Parameter       | Type     | Description                                          |
+| :-------------- | :------- | :--------------------------------------------------- |
+| `Authorization` | `string` | **Required**. En-tête `Bearer <SIGNAGE_ADMIN_TOKEN>` |
+
+Renvoie la liste des médias, du plus récent au plus ancien.
+
+#### Supprimer un média
+
+```http
+  DELETE /api/media/${id}
+```
+
+| Parameter       | Type      | Description                                          |
+| :-------------- | :-------- | :--------------------------------------------------- |
+| `Authorization` | `string`  | **Required**. En-tête `Bearer <SIGNAGE_ADMIN_TOKEN>` |
+| `id`            | `integer` | **Required**. Identifiant du média                   |
+
+`204` en cas de succès. `409` si le média est utilisé dans une playlist ou dans une version publiée.
+
 ### Playlists
 
-| Méthode | Route | Corps | Description |
-|---|---|---|---|
-| `POST` | `/api/playlists` | `{"name": "Accueil"}` | Crée une playlist (`201`). |
-| `GET` | `/api/playlists` | — | Liste les playlists avec leurs éléments. |
-| `GET` | `/api/playlists/{id}` | — | Détail d'une playlist. |
-| `PUT` | `/api/playlists/{id}` | `{"name": "Nouveau nom"}` | Renomme. |
-| `DELETE` | `/api/playlists/{id}` | — | Supprime la playlist et ses versions. `409` si une de ses versions est affectée à un écran. |
-| `PUT` | `/api/playlists/{id}/items` | liste d'éléments | **Remplace** la liste complète. L'ordre du tableau est l'ordre de lecture. |
-| `GET` | `/api/playlists/{id}/preview` | — | Brouillon courant au format lecteur, sans rien publier. |
+#### Créer une playlist
 
-Élément (`ItemIn`) :
+```http
+  POST /api/playlists
+```
 
-| Champ | Type | Règles |
-|---|---|---|
-| `type` | `"text"`, `"image"` ou `"video"` | Obligatoire |
-| `text` | texte, 2000 caractères max | Obligatoire (non vide) pour `text` |
-| `media_id` | entier | Obligatoire pour `image` et `video`, et le média doit être du même type |
-| `duration_s` | entier de 1 à 3600 | Défaut **10** pour `text` et `image`. Pour `video`, vide = lecture complète. |
+| Parameter       | Type     | Description                                          |
+| :-------------- | :------- | :--------------------------------------------------- |
+| `Authorization` | `string` | **Required**. En-tête `Bearer <SIGNAGE_ADMIN_TOKEN>` |
+| `name`          | `string` | **Required**. Nom (1 à 120 caractères), corps JSON   |
+
+Renvoie `201` avec `{"id": 1, "name": "Accueil", "items": []}`.
+
+#### Lister les playlists
+
+```http
+  GET /api/playlists
+```
+
+| Parameter       | Type     | Description                                          |
+| :-------------- | :------- | :--------------------------------------------------- |
+| `Authorization` | `string` | **Required**. En-tête `Bearer <SIGNAGE_ADMIN_TOKEN>` |
+
+#### Obtenir une playlist
+
+```http
+  GET /api/playlists/${id}
+```
+
+| Parameter       | Type      | Description                                          |
+| :-------------- | :-------- | :--------------------------------------------------- |
+| `Authorization` | `string`  | **Required**. En-tête `Bearer <SIGNAGE_ADMIN_TOKEN>` |
+| `id`            | `integer` | **Required**. Identifiant de la playlist             |
+
+#### Renommer une playlist
+
+```http
+  PUT /api/playlists/${id}
+```
+
+| Parameter       | Type      | Description                                          |
+| :-------------- | :-------- | :--------------------------------------------------- |
+| `Authorization` | `string`  | **Required**. En-tête `Bearer <SIGNAGE_ADMIN_TOKEN>` |
+| `id`            | `integer` | **Required**. Identifiant de la playlist             |
+| `name`          | `string`  | **Required**. Nouveau nom, corps JSON                |
+
+#### Supprimer une playlist
+
+```http
+  DELETE /api/playlists/${id}
+```
+
+| Parameter       | Type      | Description                                          |
+| :-------------- | :-------- | :--------------------------------------------------- |
+| `Authorization` | `string`  | **Required**. En-tête `Bearer <SIGNAGE_ADMIN_TOKEN>` |
+| `id`            | `integer` | **Required**. Identifiant de la playlist             |
+
+Supprime aussi ses versions. `204` en cas de succès, `409` si une de ses versions est affectée à un écran.
+
+#### Définir le contenu d'une playlist
+
+```http
+  PUT /api/playlists/${id}/items
+```
+
+| Parameter       | Type      | Description                                                                          |
+| :-------------- | :-------- | :----------------------------------------------------------------------------------- |
+| `Authorization` | `string`  | **Required**. En-tête `Bearer <SIGNAGE_ADMIN_TOKEN>`                                 |
+| `id`            | `integer` | **Required**. Identifiant de la playlist                                             |
+| *(corps)*       | `array`   | **Required**. Liste des éléments. **Remplace** tout le contenu ; l'ordre = l'ordre de lecture |
+
+Chaque élément du tableau :
+
+| Field        | Type      | Description                                                                                        |
+| :----------- | :-------- | :------------------------------------------------------------------------------------------------- |
+| `type`       | `string`  | **Required**. `text`, `image` ou `video`                                                           |
+| `text`       | `string`  | **Required** si `type` = `text` (non vide, 2000 caractères max)                                    |
+| `media_id`   | `integer` | **Required** si `type` = `image` ou `video` ; le média doit être du même type                      |
+| `duration_s` | `integer` | Durée en secondes (1 à 3600). Défaut **10** pour `text` et `image` ; vide pour `video` = lecture complète |
 
 ```bash
 curl -H "$A" -X PUT -H 'Content-Type: application/json' $U/api/playlists/1/items -d '[
@@ -341,17 +451,166 @@ curl -H "$A" -X PUT -H 'Content-Type: application/json' $U/api/playlists/1/items
 ]'
 ```
 
+#### Prévisualiser le brouillon
+
+```http
+  GET /api/playlists/${id}/preview
+```
+
+| Parameter       | Type      | Description                                          |
+| :-------------- | :-------- | :--------------------------------------------------- |
+| `Authorization` | `string`  | **Required**. En-tête `Bearer <SIGNAGE_ADMIN_TOKEN>` |
+| `id`            | `integer` | **Required**. Identifiant de la playlist             |
+
+Renvoie l'état enregistré de la playlist au [format manifeste](#format-du-manifeste), sans rien publier. `version_id` et `number` valent `null`.
+
 ### Publication et versions
 
-| Méthode | Route | Description |
-|---|---|---|
-| `POST` | `/api/playlists/{id}/publish` | Crée une version immuable à partir de l'état enregistré (`201`). `422` si la playlist est vide. |
-| `GET` | `/api/playlists/{id}/versions` | Liste les versions, de la plus ancienne à la plus récente. |
-| `GET` | `/api/versions/{id}` | Contenu exact d'une version, au format lecteur. |
+#### Publier une version
 
-Réponse de `publish` et de la liste (`VersionOut`) : `{"id", "playlist_id", "number", "created_at", "manifest"}`.
+```http
+  POST /api/playlists/${id}/publish
+```
 
-**Format du manifeste** (renvoyé par `/api/versions/{id}`, `/api/screens/{id}/manifest` et `/api/player/manifest`) :
+| Parameter       | Type      | Description                                          |
+| :-------------- | :-------- | :--------------------------------------------------- |
+| `Authorization` | `string`  | **Required**. En-tête `Bearer <SIGNAGE_ADMIN_TOKEN>` |
+| `id`            | `integer` | **Required**. Identifiant de la playlist             |
+
+Crée une version immuable à partir de l'état enregistré (`201`). `422` si la playlist est vide. Réponse :
+
+```json
+{ "id": 3, "playlist_id": 1, "number": 2, "created_at": "2026-10-21T21:06:10.261721", "manifest": { "...": "..." } }
+```
+
+#### Lister les versions d'une playlist
+
+```http
+  GET /api/playlists/${id}/versions
+```
+
+| Parameter       | Type      | Description                                          |
+| :-------------- | :-------- | :--------------------------------------------------- |
+| `Authorization` | `string`  | **Required**. En-tête `Bearer <SIGNAGE_ADMIN_TOKEN>` |
+| `id`            | `integer` | **Required**. Identifiant de la playlist             |
+
+Du plus ancien au plus récent, au même format que la réponse de publication.
+
+#### Obtenir une version
+
+```http
+  GET /api/versions/${id}
+```
+
+| Parameter       | Type      | Description                                          |
+| :-------------- | :-------- | :--------------------------------------------------- |
+| `Authorization` | `string`  | **Required**. En-tête `Bearer <SIGNAGE_ADMIN_TOKEN>` |
+| `id`            | `integer` | **Required**. Identifiant de la **version**          |
+
+Contenu exact de la version, au [format manifeste](#format-du-manifeste).
+
+### Écrans
+
+#### Créer un écran
+
+```http
+  POST /api/screens
+```
+
+| Parameter       | Type     | Description                                          |
+| :-------------- | :------- | :--------------------------------------------------- |
+| `Authorization` | `string` | **Required**. En-tête `Bearer <SIGNAGE_ADMIN_TOKEN>` |
+| `name`          | `string` | **Required**. Nom de l'écran (1 à 120 caractères)    |
+
+Renvoie `201` avec l'écran et son **`token`, affiché une seule fois** :
+
+```json
+{ "id": 2, "name": "Entrée", "version_id": null, "online": false,
+  "last_seen": null, "has_token": true, "token": "dX1qW1K_…" }
+```
+
+#### Lister les écrans
+
+```http
+  GET /api/screens
+```
+
+| Parameter       | Type     | Description                                          |
+| :-------------- | :------- | :--------------------------------------------------- |
+| `Authorization` | `string` | **Required**. En-tête `Bearer <SIGNAGE_ADMIN_TOKEN>` |
+
+Chaque écran a la forme `{"id", "name", "version_id", "online", "last_seen", "has_token"}`. `online` vaut `true` si le lecteur a interrogé le serveur dans les 60 dernières secondes ; `last_seen` est en UTC.
+
+#### Affecter une version à un écran
+
+```http
+  POST /api/screens/${id}/assign
+```
+
+| Parameter       | Type              | Description                                                           |
+| :-------------- | :---------------- | :-------------------------------------------------------------------- |
+| `Authorization` | `string`          | **Required**. En-tête `Bearer <SIGNAGE_ADMIN_TOKEN>`                  |
+| `id`            | `integer`         | **Required**. Identifiant de l'écran                                  |
+| `version_id`    | `integer \| null` | **Required**. Version à diffuser ; `null` retire l'affectation (corps JSON) |
+
+Revenir en arrière = affecter une ancienne version.
+
+#### Voir ce que voit un écran
+
+```http
+  GET /api/screens/${id}/manifest
+```
+
+| Parameter       | Type      | Description                                          |
+| :-------------- | :-------- | :--------------------------------------------------- |
+| `Authorization` | `string`  | **Required**. En-tête `Bearer <SIGNAGE_ADMIN_TOKEN>` |
+| `id`            | `integer` | **Required**. Identifiant de l'écran                 |
+
+Renvoie la version affectée au [format manifeste](#format-du-manifeste), **sans** marquer l'écran comme connecté. `404` si rien n'est affecté.
+
+#### Générer un nouveau jeton d'écran
+
+```http
+  POST /api/screens/${id}/rotate-token
+```
+
+| Parameter       | Type      | Description                                          |
+| :-------------- | :-------- | :--------------------------------------------------- |
+| `Authorization` | `string`  | **Required**. En-tête `Bearer <SIGNAGE_ADMIN_TOKEN>` |
+| `id`            | `integer` | **Required**. Identifiant de l'écran                 |
+
+L'ancien jeton cesse de fonctionner immédiatement. Le nouveau est renvoyé dans le champ `token`, une seule fois.
+
+#### Révoquer le jeton d'un écran
+
+```http
+  POST /api/screens/${id}/revoke-token
+```
+
+| Parameter       | Type      | Description                                          |
+| :-------------- | :-------- | :--------------------------------------------------- |
+| `Authorization` | `string`  | **Required**. En-tête `Bearer <SIGNAGE_ADMIN_TOKEN>` |
+| `id`            | `integer` | **Required**. Identifiant de l'écran                 |
+
+L'écran ne peut plus se connecter. Pour le réactiver, générez un nouveau jeton.
+
+### Lecteur
+
+#### Récupérer la playlist à diffuser
+
+```http
+  GET /api/player/manifest
+```
+
+| Parameter       | Type     | Description                                                   |
+| :-------------- | :------- | :------------------------------------------------------------ |
+| `Authorization` | `string` | **Required**. En-tête `Bearer <jeton de l'écran>` (pas le jeton admin) |
+
+Renvoie la version affectée à l'écran au [format manifeste](#format-du-manifeste) et met à jour `last_seen`. `401` si le jeton est invalide ou révoqué, `404` si rien n'est affecté.
+
+#### Format du manifeste
+
+Renvoyé par `/api/versions/${id}`, `/api/screens/${id}/manifest`, `/api/player/manifest` et `/api/playlists/${id}/preview` :
 
 ```json
 {
@@ -368,38 +627,31 @@ Réponse de `publish` et de la liste (`VersionOut`) : `{"id", "playlist_id", "nu
   ]
 }
 ```
-Pour le brouillon (`/preview`), `version_id` et `number` valent `null`.
-
-### Écrans
-
-| Méthode | Route | Corps | Description |
-|---|---|---|---|
-| `POST` | `/api/screens` | `{"name": "Entrée"}` | Crée un écran. La réponse contient **`token`**, affiché une seule fois (`201`). |
-| `GET` | `/api/screens` | — | Liste les écrans et leur état. |
-| `POST` | `/api/screens/{id}/assign` | `{"version_id": 3}` | Affecte une version. `{"version_id": null}` retire l'affectation. Revenir en arrière = affecter une ancienne version. |
-| `GET` | `/api/screens/{id}/manifest` | — | Ce que voit l'écran, **sans** le marquer connecté. `404` si rien n'est affecté. |
-| `POST` | `/api/screens/{id}/rotate-token` | — | Génère un nouveau jeton (l'ancien cesse de fonctionner). |
-| `POST` | `/api/screens/{id}/revoke-token` | — | Supprime le jeton : l'écran ne peut plus se connecter. |
-
-Réponse (`ScreenOut`) :
-```json
-{ "id": 2, "name": "Entrée", "version_id": 3, "online": true,
-  "last_seen": "2026-10-21T21:06:10.261721", "has_token": true }
-```
-`online` vaut `true` si le lecteur a interrogé le serveur dans les 60 dernières secondes. `last_seen` est en UTC.
-
-### Lecteur
-
-| Méthode | Route | Authentification | Description |
-|---|---|---|---|
-| `GET` | `/api/player/manifest` | Jeton d'écran | Renvoie la version affectée (format manifeste) et met à jour `last_seen`. `401` si le jeton est invalide ou révoqué, `404` si rien n'est affecté. |
 
 ### Pages statiques
 
-| Route | Contenu |
-|---|---|
-| `/admin/` | Interface d'administration |
-| `/player/` | Lecteur d'affichage (voir [les adresses du lecteur](#les-adresses-du-lecteur)) |
+#### Interface d'administration
+
+```http
+  GET /admin/
+```
+
+`GET /` redirige vers cette page.
+
+#### Lecteur d'affichage
+
+```http
+  GET /player/#${mode}=${valeur}
+```
+
+| Parameter | Type      | Description                                                                                  |
+| :-------- | :-------- | :------------------------------------------------------------------------------------------- |
+| `token`   | `string`  | Jeton d'écran : écran réel, marque l'écran comme connecté                                    |
+| `screen`  | `integer` | Voir ce que voit un écran (jeton admin demandé une fois), ne marque rien                     |
+| `version` | `integer` | Tester une version avant de la diffuser (jeton admin)                                        |
+| `playlist`| `integer` | Voir le brouillon courant d'une playlist (jeton admin)                                       |
+
+Un seul mode à la fois, par exemple `/player/#token=dX1q…`. Voir aussi [les adresses du lecteur](#les-adresses-du-lecteur).
 
 ---
 
@@ -544,3 +796,7 @@ Une question, un bug, une idée, une faille de sécurité à signaler ?
 | E-mail | `alexismarechalbrix@proton.me` |
 | XMPP | `canyougetsomeburger@jabber.fr` |
 | Tickets | <https://github.com/Michalex37220/TTScreen/issues> |
+
+## Licence
+
+`[À COMPLÉTER : licence du projet, à placer aussi dans un fichier LICENSE à la racine]`

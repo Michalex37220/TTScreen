@@ -1,7 +1,5 @@
 # TTscreen
 
-> Dépôt : <https://github.com/Michalex37220/TTScreen>
-
 **Un système d'affichage dynamique, gratuit et open source, créé pour un club de Tennis de Table.**
 
 TTscreen permet de gérer à distance entre 2 et 20 écrans depuis une interface web : vous déposez vos images et vidéos, composez une playlist (texte, images, vidéos), la prévisualisez, la publiez, puis choisissez sur quels écrans la diffuser. Chaque écran joue sa playlist en boucle et se met à jour tout seul.

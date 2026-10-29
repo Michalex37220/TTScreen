@@ -799,6 +799,3 @@ Une question, un bug, une idée, une faille de sécurité à signaler ?
 | XMPP | `canyougetsomeburger@jabber.fr` |
 | Tickets | <https://github.com/Michalex37220/TTScreen/issues> |
 
-## Licence
-
-`[À COMPLÉTER : licence du projet, à placer aussi dans un fichier LICENSE à la racine]`

@@ -6,6 +6,8 @@
 
 TTscreen permet de gérer à distance entre 2 et 20 écrans depuis une interface web : vous déposez vos images et vidéos, composez une playlist (texte, images, vidéos), la prévisualisez, la publiez, puis choisissez sur quels écrans la diffuser. Chaque écran joue sa playlist en boucle et se met à jour tout seul.
 
+### Documentation complète : https://alexismarechalbrix.page.gd/ttscreen.html
+
 ## Sommaire
 
 1. [État du projet](#état-du-projet)

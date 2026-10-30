@@ -4,57 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>TTscreen — Administration</title>
-<style>
-  :root { --bg:#f5f6f8; --card:#fff; --text:#1c2330; --muted:#6b7686; --line:#dde2ea; --accent:#2563eb; --danger:#dc2626; --ok:#16a34a; --warn:#d97706; }
-  * { box-sizing: border-box; }
-  body { margin:0; font:15px/1.45 system-ui,sans-serif; background:var(--bg); color:var(--text); }
-  header { display:flex; align-items:center; gap:16px; padding:10px 20px; background:var(--card); border-bottom:1px solid var(--line); position:sticky; top:0; z-index:5; }
-  nav { display:flex; gap:4px; }
-  nav button { border:0; background:none; padding:8px 14px; border-radius:8px; font:inherit; cursor:pointer; color:var(--muted); }
-  nav button.active { background:#e8effd; color:var(--accent); font-weight:600; }
-  .spacer { flex:1; }
-  main { padding:20px; max-width:1200px; margin:0 auto; }
-  h2 { margin:0 0 12px; font-size:18px; } h3 { margin:20px 0 8px; font-size:15px; }
-  button { font:inherit; border:1px solid var(--line); background:var(--card); padding:7px 12px; border-radius:8px; cursor:pointer; }
-  button:hover { border-color:#b8c1cf; }
-  button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
-  button.danger { color:var(--danger); } button.ghost { border-color:transparent; background:none; }
-  button.small { padding:3px 8px; font-size:13px; }
-  input, textarea, select { font:inherit; padding:7px 10px; border:1px solid var(--line); border-radius:8px; background:#fff; color:var(--text); }
-  textarea { width:100%; min-height:64px; resize:vertical; }
-  .muted { color:var(--muted); } .small { font-size:13px; }
-  .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
-  .two-col { display:grid; grid-template-columns:240px 1fr; gap:20px; align-items:start; }
-  @media (max-width:800px) { .two-col { grid-template-columns:1fr; } }
-  .side { display:flex; flex-direction:column; gap:6px; }
-  .side .pl { text-align:left; } .side .pl.active { border-color:var(--accent); background:#e8effd; font-weight:600; }
-  .panel { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:16px; margin-bottom:16px; }
-  .item { display:grid; grid-template-columns:28px 90px 1fr auto auto; gap:10px; align-items:center; padding:8px 0; border-top:1px solid var(--line); }
-  .item:first-child { border-top:0; }
-  .thumb { width:90px; height:56px; border-radius:6px; background:#0b0f17; color:#fff; display:flex; align-items:center; justify-content:center; overflow:hidden; font-weight:700; font-size:20px; }
-  .thumb img, .thumb video { width:100%; height:100%; object-fit:cover; }
-  .dur input { width:70px; }
-  .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(180px,1fr)); gap:14px; }
-  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:10px; display:flex; flex-direction:column; gap:6px; }
-  .card .thumb { width:100%; height:110px; } .card .name { font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  .card.pick { cursor:pointer; } .card.pick:hover { border-color:var(--accent); }
-  .drop { border:2px dashed var(--line); border-radius:12px; padding:28px; text-align:center; color:var(--muted); cursor:pointer; margin-bottom:16px; background:var(--card); }
-  .drop.over { border-color:var(--accent); color:var(--accent); }
-  .badge { display:inline-block; padding:2px 8px; border-radius:99px; font-size:12px; background:#eef1f5; }
-  .badge.ok { background:#dcfce7; color:var(--ok); } .badge.off { background:#fee2e2; color:var(--danger); } .badge.warn { background:#fef3c7; color:var(--warn); }
-  .preview { width:100%; aspect-ratio:16/9; border:0; border-radius:10px; background:#000; }
-  .overlay { position:fixed; inset:0; background:rgba(15,20,30,.55); display:flex; align-items:center; justify-content:center; z-index:20; padding:16px; }
-  .modal { background:var(--card); border-radius:14px; padding:16px; width:min(900px,100%); max-height:90vh; overflow:auto; }
-  .modal-head { display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; }
-  .login { max-width:360px; margin:12vh auto; background:var(--card); padding:28px; border-radius:14px; border:1px solid var(--line); display:flex; flex-direction:column; gap:12px; }
-  .login h1 { margin:0; } .err { color:var(--danger); min-height:1.2em; }
-  #toast { position:fixed; right:16px; bottom:16px; display:flex; flex-direction:column; gap:8px; z-index:30; }
-  #toast div { background:#1c2330; color:#fff; padding:10px 14px; border-radius:8px; max-width:360px; }
-  #toast div.bad { background:var(--danger); }
-  .token { width:100%; font-family:monospace; }
-  .vers { display:flex; gap:10px; align-items:center; padding:8px 0; border-top:1px solid var(--line); flex-wrap:wrap; }
-  .vers:first-child { border-top:0; }
-</style>
+<link rel="stylesheet" href="style.css">  
 </head>
 <body>
 <div id="app"></div>

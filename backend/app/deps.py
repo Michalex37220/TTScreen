@@ -17,7 +17,7 @@ def get_db(request: Request):
     finally:
         db.close()
 
-
+# Check si le header est correct (pour des raisons de sécurité)
 def _bearer(authorization: str | None) -> str | None:
     if authorization and authorization.lower().startswith("bearer "):
         return authorization[7:].strip()
@@ -30,7 +30,7 @@ def require_admin(request: Request, authorization: str | None = Header(default=N
     if not token or not secrets.compare_digest(token, expected):
         raise HTTPException(401, "Authentification requise", headers={"WWW-Authenticate": "Bearer"})
 
-
+# Verification du Token de connection grace au calcul du hash
 def hash_token(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
 

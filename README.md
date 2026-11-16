@@ -2,9 +2,12 @@
 
 **Un système d'affichage dynamique, gratuit et open source, créé pour un club de Tennis de Table.**
 
-TTscreen permet de gérer à distance entre 2 et 20 écrans depuis une interface web : vous déposez vos images et vidéos, composez une playlist (texte, images, vidéos), la prévisualisez, la publiez, puis choisissez sur quels écrans la diffuser. Chaque écran joue sa playlist en boucle et se met à jour tout seul.
+TTscreen permet de gérer à distance des écrans depuis une interface web : vous déposez vos images et vidéos, composez une playlist (texte, images, vidéos), la prévisualisez, la publiez, puis choisissez sur quels écrans la diffuser. Chaque écran joue sa playlist en boucle et se met à jour tout seul.
 
 ### Documentation complète : https://alexismarechalbrix.page.gd/ttscreen.html
+
+> NOTE :
+> Dans certaines parties de la documentation le mot "TTScreen" est remplacé par "Signage", cela est due au fait que c'est l'ancien nom du projet et que je n'ai pas eu le temps de changer la documentation en entiere vu que j'implémente encore des fonctionnalités
 
 ## Sommaire
 
@@ -36,18 +39,14 @@ TTscreen est un **MVP fonctionnel en local**. Ce qui est réalisé et ce qui res
 | Domaine | État |
 |---|---|
 | API (médias, playlists, versions immuables, écrans, jetons par écran) | ✅ Fait, couvert par des tests |
-| Interface d'administration (médias, playlists, prévisualisation, publication, écrans) | ✅ Fait (HTML/JS sans compilation) |
+| Interface d'administration (médias, playlists, prévisualisation, publication, écrans) | ✅ Fait |
 | Lecteur web (texte, images, vidéos, boucle, mise à jour à distance) | ✅ Fait |
 | Docker (Alpine), Caddy HTTPS, PostgreSQL, script de sauvegarde | 🟡 Écrit, à valider sur votre serveur |
 | Cache hors ligne du lecteur (téléchargement local, SHA-256, remplacement atomique) | ⏳ À faire |
-| Comptes utilisateurs et rôles | ⏳ À faire (un jeton admin unique en attendant) |
-| Groupes d'écrans | ⏳ À faire |
+| Comptes utilisateurs et rôles | ⏳ À faire (un jeton admin unique en attendant voir la partie adapté) |
+| Groupes d'écrans | ⏳ En fonction des usages |
 | Limitation de débit, journal des opérations sensibles | ⏳ À faire |
-| Migrations de base de données (Alembic) | ⏳ À faire |
-| Interface en React/TypeScript | ⏳ Prévue (l'interface actuelle est en JavaScript simple) |
-| Redémarrage automatique du lecteur | ⏳ À faire (voir l'exemple systemd plus bas) |
-
-> **À ne pas exposer sur Internet tel quel** tant que les comptes/rôles et la limitation de débit ne sont pas en place. Voir [Sécurité](#sécurité).
+| Interface en React/TypeScript | ⏳ Possible mais peu probable car j'aime pas React (l'interface actuelle est en JavaScript simple) |
 
 ## Fonctionnalités
 
@@ -86,7 +85,7 @@ Principe de diffusion : l'administrateur **publie** une version, l'**affecte** �
 
 ## Installation
 
-Dans tous les cas, l'API démarre sur `http://127.0.0.1:8000` et l'interface est à la racine (`/` redirige vers `/admin/`).
+Dans tous les cas, l'API démarre sur `http://127.0.0.1:8000` et l'interface est à la racine (`/` redirige vers `/admin/`). (attention ceci est uniquement pour les parametres de base, cela peut etre modifie voir le deploiement en prod)
 
 ### NixOS
 
@@ -111,7 +110,7 @@ Dans tous les cas, l'API démarre sur `http://127.0.0.1:8000` et l'interface est
    ./scripts/dev.sh     # démarre l'API avec rechargement automatique
    ```
 
-Pour utiliser Docker sur NixOS, activez le démon : `virtualisation.docker.enable = true;` et ajoutez votre utilisateur au groupe `docker`.
+Pour utiliser Docker sur NixOS, activez le démon : `virtualisation.docker.enable = true;` et ajoutez votre utilisateur au groupe `docker` [documentation officiel](https://wiki.nixos.org/wiki/Docker/en).
 
 ### Hors NixOS (Linux, macOS, Windows/WSL)
 
@@ -124,9 +123,9 @@ cp .env.example .env
 cd backend
 python3 -m venv .venv
 . .venv/bin/activate                      # Windows (PowerShell) : .venv\Scripts\Activate.ps1
-pip install -r requirements.txt pytest httpx
+pip install -r requirements.txt # n'a plus besoin de paquets supplementaires maintenant 
 
-python -m pytest -q                       # tests
+python -m pytest -q                       # tests (certains peuvent déclencher des warnings ce qui est normal)
 python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
@@ -686,7 +685,12 @@ Sur le serveur, ne publiez pas le port 8000 : l'API n'est joignable que par Cadd
 ```
 À planifier par exemple avec cron : `0 3 * * * cd /chemin/TTScreen && ./scripts/backup.sh`. Copiez aussi les sauvegardes **hors du serveur**.
 
-**Restauration** de la base : `gunzip -c backups/db-AAAA-MM-JJ-HHMM.sql.gz | docker compose -f deploy/docker-compose.prod.yml exec -T db psql -U signage signage`. Pour les médias, extrayez l'archive `.tgz` dans le volume `signage_media`. Testez une restauration avant d'en avoir besoin.
+**Restauration** de la base : 
+```bash
+gunzip -c backups/db-AAAA-MM-JJ-HHMM.sql.gz | docker compose -f deploy/docker-compose.prod.yml exec -T db psql -U signage signage
+```
+
+. Pour les médias, extrayez l'archive `.tgz` dans le volume `signage_media`. Testez une restauration avant d'en avoir besoin.
 
 **Mise à jour** :
 ```bash
@@ -706,7 +710,7 @@ Déjà en place :
 - En-têtes de sécurité et HTTPS via Caddy.
 
 Limites actuelles, à connaître :
-- Un **seul jeton admin partagé** : pas encore de comptes, de rôles ni de journal d'audit.
+- Un **seul jeton admin partagé** : pas encore de comptes, de rôles ni de journal d'audit (ce qui est suffisant pour une utilisation classique).
 - **Pas de limitation de débit** sur l'API.
 - Les médias sous `/files/` sont lisibles sans authentification (noms non devinables). Des URL signées sont prévues.
 - Le jeton admin saisi dans l'interface est conservé dans le `sessionStorage` du navigateur (effacé à la fermeture de l'onglet).
@@ -724,7 +728,7 @@ Les contributions sont les bienvenues : correctifs, tests, traductions, document
 3. **Installez l'environnement** ([NixOS](#nixos) ou [hors NixOS](#hors-nixos-linux-macos-windowswsl)).
 4. **Écrivez le code et ses tests** : toute fonctionnalité doit avoir des tests automatisés dans `backend/tests/`. Lancez-les avec `./scripts/test.sh` (ou `python -m pytest -q` depuis `backend/`). Une fonctionnalité sans test passant n'est pas considérée comme terminée.
 5. **Vérifiez à la main** dans le navigateur : interface `/admin/`, prévisualisation, lecteur.
-6. **Commitez** avec des messages clairs (une idée par commit), puis ouvrez une **demande de fusion** qui décrit le problème, la solution et comment la tester.
+6. **Commitez** avec des messages clairs (une idée par commit), puis ouvrez une **demande de merge** qui décrit le problème, la solution et comment la tester.
 
 Conventions :
 - Aucun secret, jeton, mot de passe ni fichier `.env` dans Git.
@@ -737,7 +741,7 @@ Idées de contributions : cache hors ligne du lecteur, comptes et rôles, groupe
 ## FAQ
 
 **Combien d'écrans peut-on gérer ?**
-Le projet vise de 2 à 20 écrans. À cette échelle, la charge est très faible (environ 2 requêtes par seconde pour 20 écrans).
+Le projet vise de 2 à 20 écrans. À cette échelle, la charge est très faible (environ 2 requêtes par seconde pour 20 écrans) Mais peut en gérer bien plus en fonction de la configuration materielle du serveur et de la bande passante disponible.
 
 **Quelle différence entre « Enregistrer » et « Publier » ?**
 Enregistrer sauvegarde le brouillon de la playlist. Publier en crée une version figée. Un écran ne reçoit que des versions publiées **et** affectées.
@@ -757,17 +761,8 @@ Il n'est pas récupérable (seul son hachage est stocké). Cliquez sur **Nouveau
 **J'ai perdu le jeton admin.**
 C'est la valeur de `SIGNAGE_ADMIN_TOKEN` dans votre `.env` (ou `deploy/.env` en production). Pour le changer, modifiez-la et redémarrez l'API.
 
-**Un écran apparaît « déconnecté » alors qu'il est allumé.**
-L'écran doit ouvrir l'adresse avec `#token=…` (et non `#screen=…`, qui est une prévisualisation). L'état « connecté » signifie une requête dans les 60 dernières secondes ; vérifiez le réseau et que le jeton n'a pas été révoqué.
-
-**Les vidéos n'ont pas de son.**
-C'est voulu : les navigateurs n'autorisent la lecture automatique que sans son.
-
 **Les vidéos ne démarrent pas sur l'écran.**
 Lancez Chromium avec `--autoplay-policy=no-user-gesture-required` et vérifiez que le format est MP4 (H.264) ou WebM lisible par le Raspberry Pi / mini-PC.
-
-**Quels formats et quelles tailles ?**
-PNG, JPEG, WebP, GIF, MP4, WebM, jusqu'à 200 Mo par fichier (`SIGNAGE_MAX_UPLOAD_MB`). En production, Caddy limite le corps de requête à 210 Mo.
 
 **Je ne peux pas supprimer un média (erreur 409).**
 Il est utilisé par une playlist ou par une version publiée. Retirez-le des playlists ; s'il figure dans une version publiée, il est conservé pour permettre le retour arrière.
@@ -785,15 +780,16 @@ Oui : tout appareil capable de lancer Chromium en plein écran (mini-PC, ancien 
 Voir [Sauvegardes et mises à jour](#sauvegardes-et-mises-à-jour).
 
 **`nix develop` affiche « experimental Nix feature 'nix-command' is disabled ».**
-Activez les flakes, voir [NixOS](#nixos).
+Activez les flakes, voir [NixOS](#nixos).	
 
 ## Contact
 
-Une question, un bug, une idée, une faille de sécurité à signaler ?
+Pour me contacter pour une raison ou une autre ?
 
 | Canal | Adresse |
 |---|---|
 | E-mail | `alexismarechalbrix@proton.me` |
 | XMPP | `canyougetsomeburger@jabber.fr` |
 | Tickets | <https://github.com/Michalex37220/TTScreen/issues> |
-
+| Mon site internet | <https://alexismarechalbrix.page.gd/> |
+# FREE MALLOC

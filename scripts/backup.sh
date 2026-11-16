@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Sauvegarde PostgreSQL + médias dans ./backups (à lancer sur le VPS, idéalement via cron).
+# A effectuer avant chaque update pour des raisons de securité
 set -euo pipefail
 cd "$(dirname "$0")/.."
 D=$(date +%F-%H%M); mkdir -p backups

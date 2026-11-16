@@ -8,7 +8,7 @@ services:
     volumes:
       - data:/data
     ports:
-      - "127.0.0.1:8000:8000"
+      - "127.0.0.1:8000:8000" # a modifier si jamais vous voulez pouvoir y acceder sur le réseau local et non pas seulement la machine
     restart: unless-stopped
 volumes:
   data:

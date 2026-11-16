@@ -7,7 +7,7 @@ from pathlib import Path
 
 from fastapi import HTTPException, UploadFile
 
-# (kind, mime, extension)
+# Toutes les extensions autorisé (pour des raisons de praticité)
 _ALLOWED = {
     "png": ("image", "image/png", "png"),
     "jpeg": ("image", "image/jpeg", "jpg"),

@@ -1,3 +1,4 @@
+# Tout les points de l'api décrit dans la documentation complete et dans le README
 from __future__ import annotations
 
 import secrets
@@ -55,7 +56,6 @@ def health():
 
 @public.get("/files/{stored_name}")
 def get_file(stored_name: str, request: Request):
-    # Noms = SHA-256 + extension (non devinables). À durcir par URL signées à l'étape 7.
     if "/" in stored_name or ".." in stored_name:
         raise HTTPException(404)
     path = request.app.state.settings.media_dir / stored_name

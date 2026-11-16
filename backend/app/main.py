@@ -14,14 +14,15 @@ from .db import Base, make_session_factory
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or Settings.from_env()
     if settings.env == "production" and (settings.admin_token == "dev-admin-token" or len(settings.admin_token) < 24):
-        raise RuntimeError("SIGNAGE_ADMIN_TOKEN absent, par défaut ou trop court (24 caractères minimum) en production")
+        raise RuntimeError("SIGNAGE_ADMIN_TOKEN absent, par défaut ou trop court (24 caractères minimum) en production") # uniquement valable en prod
     settings.media_dir.mkdir(parents=True, exist_ok=True)
     if settings.database_url.startswith("sqlite:///./"):
         settings.media_dir.parent.mkdir(parents=True, exist_ok=True)
     engine, factory = make_session_factory(settings.database_url)
     from . import models  # noqa: F401  (enregistre les tables)
-    Base.metadata.create_all(engine)  # Alembic viendra avec PostgreSQL (étape 8)
+    Base.metadata.create_all(engine)  
 
+    # Si jamais vous vous demandez pourquoi ca s'apelle signage RTFM
     app = FastAPI(title="Signage API")
     app.state.settings = settings
     app.state.session_factory = factory

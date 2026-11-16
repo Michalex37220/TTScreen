@@ -7,6 +7,7 @@ from pathlib import Path
 
 @dataclass(frozen=True)
 class Settings:
+    # Base de donné (modifiable mais a vos risques)
     database_url: str = "sqlite:///./data/signage.db"
     media_dir: Path = Path("./data/media")
     admin_token: str = "dev-admin-token"

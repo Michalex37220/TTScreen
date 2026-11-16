@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Démarre l'API en local (SQLite + stockage local), rechargement automatique.
+# version de développement quasiment jamais mis a jour car j'utiliser le protoc définie dans le README
 set -euo pipefail
 cd "$(dirname "$0")/.."
 [ -f .env ] && set -a && . ./.env && set +a

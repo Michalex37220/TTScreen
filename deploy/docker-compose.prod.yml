@@ -1,4 +1,5 @@
 # Production : PostgreSQL + API + Caddy (HTTPS automatique). Variables dans deploy/.env (jamais dans Git).
+# Voir le README pour l'architecture de la prod
 name: TTscreen
 services:
   db:

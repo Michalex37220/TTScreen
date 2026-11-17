@@ -6,9 +6,6 @@ TTscreen permet de gérer à distance des écrans depuis une interface web : vou
 
 ### Documentation complète : https://alexismarechalbrix.page.gd/ttscreen.html
 
-> NOTE :
-> Dans certaines parties de la documentation le mot "TTScreen" est remplacé par "Signage", cela est due au fait que c'est l'ancien nom du projet et que je n'ai pas eu le temps de changer la documentation en entiere vu que j'implémente encore des fonctionnalités
-
 ## Sommaire
 
 1. [État du projet](#état-du-projet)
@@ -43,9 +40,9 @@ TTscreen est un **MVP fonctionnel en local**. Ce qui est réalisé et ce qui res
 | Lecteur web (texte, images, vidéos, boucle, mise à jour à distance) | ✅ Fait |
 | Docker (Alpine), Caddy HTTPS, PostgreSQL, script de sauvegarde | 🟡 Écrit, à valider sur votre serveur |
 | Cache hors ligne du lecteur (téléchargement local, SHA-256, remplacement atomique) | ⏳ À faire |
-| Comptes utilisateurs et rôles | ⏳ À faire (un jeton admin unique en attendant voir la partie adapté) |
+| Comptes utilisateurs et rôles (admin / éditeur / lecture seule), sessions révoquables | ✅ Fait (le jeton admin historique reste accepté comme compte « admin » d'amorçage) |
 | Groupes d'écrans | ⏳ En fonction des usages |
-| Limitation de débit, journal des opérations sensibles | ⏳ À faire |
+| Limitation de débit, journal des opérations sensibles (audit) | ✅ Fait |
 | Interface en React/TypeScript | ⏳ Possible mais peu probable car j'aime pas React (l'interface actuelle est en JavaScript simple) |
 
 ## Fonctionnalités
@@ -129,7 +126,7 @@ python -m pytest -q                       # tests (certains peuvent déclencher 
 python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
-Lancez ces commandes **depuis le dossier `backend/`** : les chemins `./data/...` sont relatifs au dossier de lancement, donc la base et les médias sont créés dans `backend/data/` (ignoré par Git). Pour les déplacer, renseignez des chemins absolus dans `SIGNAGE_DATABASE_URL` et `SIGNAGE_MEDIA_DIR`. Sous Windows natif, préférez WSL.
+Lancez ces commandes **depuis le dossier `backend/`** : les chemins `./data/...` sont relatifs au dossier de lancement, donc la base et les médias sont créés dans `backend/data/` (ignoré par Git). Pour les déplacer, renseignez des chemins absolus dans `TTSCREEN_DATABASE_URL` et `TTSCREEN_MEDIA_DIR`. Sous Windows natif, préférez WSL.
 
 Sur Linux/macOS, `./scripts/dev.sh` et `./scripts/test.sh` fonctionnent aussi, une fois le venv activé.
 
@@ -141,18 +138,24 @@ Essai local avec SQLite (accessible seulement depuis votre machine) :
 docker compose -f deploy/docker-compose.yml up --build
 ```
 
-Puis ouvrez <http://127.0.0.1:8000>. Le jeton admin par défaut est `dev-admin-token` (ou la valeur de `SIGNAGE_ADMIN_TOKEN` si vous l'exportez). Les données sont dans le volume Docker `signage_data`. La production est décrite [plus bas](#déploiement-en-production).
+Puis ouvrez <http://127.0.0.1:8000>. Le jeton admin par défaut est `dev-admin-token` (ou la valeur de `TTSCREEN_ADMIN_TOKEN` si vous l'exportez). Les données sont dans le volume Docker `ttscreen_data`. La production est décrite [plus bas](#déploiement-en-production).
 
 ### Variables d'environnement
 
 | Variable | Défaut | Rôle |
 |---|---|---|
-| `SIGNAGE_ADMIN_TOKEN` | `dev-admin-token` | Jeton de l'administrateur. **Obligatoire et fort en production** (24 caractères minimum, sinon l'API refuse de démarrer). |
-| `SIGNAGE_DATABASE_URL` | `sqlite:///./data/signage.db` | Base de données. PostgreSQL : `postgresql+psycopg://utilisateur:mdp@hôte:5432/base`. |
-| `SIGNAGE_MEDIA_DIR` | `./data/media` | Dossier de stockage des médias. |
-| `SIGNAGE_MAX_UPLOAD_MB` | `200` | Taille maximale d'un fichier téléversé. |
-| `SIGNAGE_ENV` | `development` | Mettre `production` pour activer les contrôles de sécurité au démarrage. |
-| `SIGNAGE_FRONTEND_DIR` / `SIGNAGE_PLAYER_DIR` | dossiers du dépôt | Emplacement de l'interface et du lecteur (utile en conteneur). |
+| `TTSCREEN_ADMIN_TOKEN` | `dev-admin-token` | Jeton de l'administrateur. **Obligatoire et fort en production** (24 caractères minimum, sinon l'API refuse de démarrer). |
+| `TTSCREEN_DATABASE_URL` | `sqlite:///./data/ttscreen.db` | Base de données. PostgreSQL : `postgresql+psycopg://utilisateur:mdp@hôte:5432/base`. |
+| `TTSCREEN_MEDIA_DIR` | `./data/media` | Dossier de stockage des médias. |
+| `TTSCREEN_MAX_UPLOAD_MB` | `200` | Taille maximale d'un fichier téléversé. |
+| `TTSCREEN_ENV` | `development` | Mettre `production` pour activer les contrôles de sécurité au démarrage. |
+| `TTSCREEN_BOOTSTRAP_ADMIN_USER` / `TTSCREEN_BOOTSTRAP_ADMIN_PASSWORD` | vide | Si renseignés, créent (ou réinitialisent) un compte admin nommé au démarrage. |
+| `TTSCREEN_SESSION_TTL_H` | `12` | Durée de validité d'une session utilisateur, en heures. |
+| `TTSCREEN_RATE_WINDOW_S` | `60` | Taille de la fenêtre glissante de limitation de débit, en secondes. |
+| `TTSCREEN_RATE_LIMIT_API` | `600` | Requêtes / fenêtre / IP sur le reste de `/api` (`0` = illimité). |
+| `TTSCREEN_RATE_LIMIT_PLAYER` | `120` | Requêtes / fenêtre / **jeton d'écran** sur `/api/player/manifest`. |
+| `TTSCREEN_RATE_LIMIT_LOGIN` | `20` | Tentatives de connexion / fenêtre / IP (anti force brute). |
+| `TTSCREEN_FRONTEND_DIR` / `TTSCREEN_PLAYER_DIR` | dossiers du dépôt | Emplacement de l'interface et du lecteur (utile en conteneur). |
 | `UVICORN_WORKERS` | `1` | Nombre de processus dans le conteneur. 1 suffit largement pour 20 écrans. |
 
 Générer un jeton solide : `python3 -c "import secrets; print(secrets.token_urlsafe(32))"`. Ne commitez jamais `.env` (il est dans `.gitignore`).
@@ -163,7 +166,7 @@ Générer un jeton solide : `python3 -c "import secrets; print(secrets.token_url
 
 ### Avec l'interface web
 
-Ouvrez <http://127.0.0.1:8000/> et saisissez le jeton admin (`SIGNAGE_ADMIN_TOKEN`). Trois onglets :
+Ouvrez <http://127.0.0.1:8000/> et connectez-vous avec un **compte utilisateur** (identifiant + mot de passe) ou, si aucun compte n'existe encore, avec le **jeton admin** (`TTSCREEN_ADMIN_TOKEN`, champ identifiant laissé vide). Onglets :
 
 **Médias**
 - Glissez vos images et vidéos dans la zone en pointillés, ou cliquez pour choisir plusieurs fichiers.
@@ -183,6 +186,11 @@ Ouvrez <http://127.0.0.1:8000/> et saisissez le jeton admin (`SIGNAGE_ADMIN_TOKE
 2. **Copiez le jeton affiché : il ne l'est qu'une fois.** L'adresse à ouvrir sur l'écran est donnée avec.
 3. Choisissez la version à diffuser et cliquez sur **Affecter**.
 4. **Voir l'écran** affiche exactement ce que voit l'écran. **Nouveau jeton** et **Révoquer** gèrent l'accès.
+
+**Comptes** (onglet réservé au rôle admin)
+- Créez des comptes avec un rôle : **viewer** (lecture seule), **editor** (contenu, publication, écrans), **admin** (tout, y compris cette page).
+- **Désactiver** révoque immédiatement les sessions du compte ; **Mot de passe** et **Supprimer** aussi. Il reste toujours au moins un administrateur actif.
+- Le **journal des opérations sensibles** liste les connexions (réussies ou non), publications, affectations, créations/suppressions, etc., avec l'auteur, la date et l'IP.
 
 > **Enregistrer ≠ publier.** Les modifications d'une playlist n'atteignent jamais un écran tant que vous n'avez pas publié une nouvelle version **et** l'avoir affectée à l'écran.
 
@@ -262,10 +270,11 @@ Documentation interactive générée automatiquement : **`/docs`** (Swagger) et 
 
 | Type | En-tête | Utilisé pour |
 | :--- | :------ | :----------- |
-| Administrateur | `Authorization: Bearer <SIGNAGE_ADMIN_TOKEN>` | Toutes les routes `/api/...` sauf `/api/health` et `/api/player/manifest` |
+| Compte utilisateur | `Authorization: Bearer <jeton de session>` (obtenu via `POST /api/auth/login`) | Routes `/api/...` selon le rôle : `viewer` = lecture seule, `editor` = + contenu/publication/écrans, `admin` = + comptes et journal |
+| Administrateur (historique) | `Authorization: Bearer <TTSCREEN_ADMIN_TOKEN>` | Toutes les routes `/api/...` sauf `/api/health` et `/api/player/manifest` (équivalent admin, sert à l'amorçage) |
 | Écran | `Authorization: Bearer <jeton de l'écran>` | `/api/player/manifest` uniquement |
 
-Un jeton d'écran ne donne **aucun** accès aux routes d'administration. Les jetons d'écran sont stockés hachés (SHA-256) : ils ne peuvent plus être relus après leur création.
+Un jeton d'écran ne donne **aucun** accès aux routes d'administration. Les jetons d'écran et de session sont stockés hachés (SHA-256) : ils ne peuvent plus être relus après leur création. Les sessions expirent (`TTSCREEN_SESSION_TTL_H`) et sont révoquées à la déconnexion, au changement de mot de passe ou à la désactivation du compte.
 
 #### Codes de réponse
 
@@ -273,12 +282,14 @@ Un jeton d'écran ne donne **aucun** accès aux routes d'administration. Les jet
 | :--- | :------------ |
 | `200` / `201` / `204` | Succès / créé / succès sans contenu |
 | `400` | Fichier vide |
-| `401` | Jeton absent, invalide ou révoqué |
+| `401` | Jeton absent, invalide, révoqué ou session expirée |
+| `403` | Authentifié mais rôle insuffisant |
 | `404` | Ressource introuvable (ou aucune version affectée à l'écran) |
-| `409` | Conflit : média ou playlist encore utilisé |
+| `409` | Conflit : ressource encore utilisée, nom déjà pris, dernier admin… |
 | `413` | Fichier trop volumineux |
 | `415` | Type de fichier non autorisé |
 | `422` | Données invalides |
+| `429` | Trop de requêtes (limitation de débit), réessayer après `Retry-After` |
 
 Format d'erreur : `{"detail": "Message"}`. Pour un `422` de validation, `detail` peut être une liste d'objets contenant un champ `msg`.
 
@@ -304,6 +315,44 @@ Aucun paramètre, aucune authentification. Renvoie `{"status": "ok"}`.
 
 Non authentifié (le nom n'est pas devinable). Réponse avec l'en-tête `X-Content-Type-Options: nosniff`.
 
+### Comptes, sessions et journal
+
+#### Se connecter
+
+```http
+  POST /api/auth/login
+```
+
+```json
+{"username": "emma", "password": "motdepasse"}
+```
+
+Ou, pour le jeton admin historique (champ identifiant vide côté interface) : `{"token": "dev-admin-token"}`. Renvoie `{"token": "...", "username": "...", "role": "...", "expires_at": "..."}` : le `token` est le jeton de session à passer en `Bearer`. Limité à `TTSCREEN_RATE_LIMIT_LOGIN` tentatives par minute et par IP. Les connexions réussies et échouées sont journalisées.
+
+#### Se déconnecter / identidad courante
+
+```http
+  POST /api/auth/logout     # révoque la session courante (204)
+  GET  /api/auth/me         # {"username", "role", "legacy"} du jeton courant
+```
+
+#### Gérer les comptes (rôle admin)
+
+```http
+  GET    /api/users                    # liste des comptes
+  POST   /api/users                    # {"username", "password" (8 min.), "role": "viewer|editor|admin"} → 201
+  PATCH  /api/users/{id}               # {"role"?, "active"?, "password"?} — révoque les sessions du compte
+  DELETE /api/users/{id}               # 204 (interdit de se supprimer soi-même ou le dernier admin actif)
+```
+
+#### Consulter le journal des opérations sensibles (rôle admin)
+
+```http
+  GET /api/audit?action=playlist.publish&limit=100&offset=0
+```
+
+Renvoie les entrées les plus récentes d'abord : `created_at`, `username`, `role`, `action`, `target`, `detail`, `ip`.
+
 ### Médias
 
 #### Téléverser un média
@@ -314,7 +363,7 @@ Non authentifié (le nom n'est pas devinable). Réponse avec l'en-tête `X-Conte
 
 | Parameter       | Type     | Description                                                                                     |
 | :-------------- | :------- | :---------------------------------------------------------------------------------------------- |
-| `Authorization` | `string` | **Required**. En-tête `Bearer <SIGNAGE_ADMIN_TOKEN>`                                            |
+| `Authorization` | `string` | **Required**. En-tête `Bearer <TTSCREEN_ADMIN_TOKEN>`                                            |
 | `file`          | `file`   | **Required**. PNG, JPEG, WebP, GIF, MP4 ou WebM (`multipart/form-data`, 200 Mo max par défaut) |
 
 Le type est détecté d'après le contenu du fichier, pas son extension. Un fichier déjà présent (même SHA-256) renvoie le média existant.
@@ -343,7 +392,7 @@ curl -H "$A" -F file=@photo.jpg $U/api/media
 
 | Parameter       | Type     | Description                                          |
 | :-------------- | :------- | :--------------------------------------------------- |
-| `Authorization` | `string` | **Required**. En-tête `Bearer <SIGNAGE_ADMIN_TOKEN>` |
+| `Authorization` | `string` | **Required**. En-tête `Bearer <TTSCREEN_ADMIN_TOKEN>` |
 
 Renvoie la liste des médias, du plus récent au plus ancien.
 
@@ -355,7 +404,7 @@ Renvoie la liste des médias, du plus récent au plus ancien.
 
 | Parameter       | Type      | Description                                          |
 | :-------------- | :-------- | :--------------------------------------------------- |
-| `Authorization` | `string`  | **Required**. En-tête `Bearer <SIGNAGE_ADMIN_TOKEN>` |
+| `Authorization` | `string`  | **Required**. En-tête `Bearer <TTSCREEN_ADMIN_TOKEN>` |
 | `id`            | `integer` | **Required**. Identifiant du média                   |
 
 `204` en cas de succès. `409` si le média est utilisé dans une playlist ou dans une version publiée.
@@ -370,7 +419,7 @@ Renvoie la liste des médias, du plus récent au plus ancien.
 
 | Parameter       | Type     | Description                                          |
 | :-------------- | :------- | :--------------------------------------------------- |
-| `Authorization` | `string` | **Required**. En-tête `Bearer <SIGNAGE_ADMIN_TOKEN>` |
+| `Authorization` | `string` | **Required**. En-tête `Bearer <TTSCREEN_ADMIN_TOKEN>` |
 | `name`          | `string` | **Required**. Nom (1 à 120 caractères), corps JSON   |
 
 Renvoie `201` avec `{"id": 1, "name": "Accueil", "items": []}`.
@@ -383,7 +432,7 @@ Renvoie `201` avec `{"id": 1, "name": "Accueil", "items": []}`.
 
 | Parameter       | Type     | Description                                          |
 | :-------------- | :------- | :--------------------------------------------------- |
-| `Authorization` | `string` | **Required**. En-tête `Bearer <SIGNAGE_ADMIN_TOKEN>` |
+| `Authorization` | `string` | **Required**. En-tête `Bearer <TTSCREEN_ADMIN_TOKEN>` |
 
 #### Obtenir une playlist
 
@@ -393,7 +442,7 @@ Renvoie `201` avec `{"id": 1, "name": "Accueil", "items": []}`.
 
 | Parameter       | Type      | Description                                          |
 | :-------------- | :-------- | :--------------------------------------------------- |
-| `Authorization` | `string`  | **Required**. En-tête `Bearer <SIGNAGE_ADMIN_TOKEN>` |
+| `Authorization` | `string`  | **Required**. En-tête `Bearer <TTSCREEN_ADMIN_TOKEN>` |
 | `id`            | `integer` | **Required**. Identifiant de la playlist             |
 
 #### Renommer une playlist
@@ -404,7 +453,7 @@ Renvoie `201` avec `{"id": 1, "name": "Accueil", "items": []}`.
 
 | Parameter       | Type      | Description                                          |
 | :-------------- | :-------- | :--------------------------------------------------- |
-| `Authorization` | `string`  | **Required**. En-tête `Bearer <SIGNAGE_ADMIN_TOKEN>` |
+| `Authorization` | `string`  | **Required**. En-tête `Bearer <TTSCREEN_ADMIN_TOKEN>` |
 | `id`            | `integer` | **Required**. Identifiant de la playlist             |
 | `name`          | `string`  | **Required**. Nouveau nom, corps JSON                |
 
@@ -416,7 +465,7 @@ Renvoie `201` avec `{"id": 1, "name": "Accueil", "items": []}`.
 
 | Parameter       | Type      | Description                                          |
 | :-------------- | :-------- | :--------------------------------------------------- |
-| `Authorization` | `string`  | **Required**. En-tête `Bearer <SIGNAGE_ADMIN_TOKEN>` |
+| `Authorization` | `string`  | **Required**. En-tête `Bearer <TTSCREEN_ADMIN_TOKEN>` |
 | `id`            | `integer` | **Required**. Identifiant de la playlist             |
 
 Supprime aussi ses versions. `204` en cas de succès, `409` si une de ses versions est affectée à un écran.
@@ -429,7 +478,7 @@ Supprime aussi ses versions. `204` en cas de succès, `409` si une de ses versio
 
 | Parameter       | Type      | Description                                                                          |
 | :-------------- | :-------- | :----------------------------------------------------------------------------------- |
-| `Authorization` | `string`  | **Required**. En-tête `Bearer <SIGNAGE_ADMIN_TOKEN>`                                 |
+| `Authorization` | `string`  | **Required**. En-tête `Bearer <TTSCREEN_ADMIN_TOKEN>`                                 |
 | `id`            | `integer` | **Required**. Identifiant de la playlist                                             |
 | *(corps)*       | `array`   | **Required**. Liste des éléments. **Remplace** tout le contenu ; l'ordre = l'ordre de lecture |
 
@@ -458,7 +507,7 @@ curl -H "$A" -X PUT -H 'Content-Type: application/json' $U/api/playlists/1/items
 
 | Parameter       | Type      | Description                                          |
 | :-------------- | :-------- | :--------------------------------------------------- |
-| `Authorization` | `string`  | **Required**. En-tête `Bearer <SIGNAGE_ADMIN_TOKEN>` |
+| `Authorization` | `string`  | **Required**. En-tête `Bearer <TTSCREEN_ADMIN_TOKEN>` |
 | `id`            | `integer` | **Required**. Identifiant de la playlist             |
 
 Renvoie l'état enregistré de la playlist au [format manifeste](#format-du-manifeste), sans rien publier. `version_id` et `number` valent `null`.
@@ -473,7 +522,7 @@ Renvoie l'état enregistré de la playlist au [format manifeste](#format-du-mani
 
 | Parameter       | Type      | Description                                          |
 | :-------------- | :-------- | :--------------------------------------------------- |
-| `Authorization` | `string`  | **Required**. En-tête `Bearer <SIGNAGE_ADMIN_TOKEN>` |
+| `Authorization` | `string`  | **Required**. En-tête `Bearer <TTSCREEN_ADMIN_TOKEN>` |
 | `id`            | `integer` | **Required**. Identifiant de la playlist             |
 
 Crée une version immuable à partir de l'état enregistré (`201`). `422` si la playlist est vide. Réponse :
@@ -490,7 +539,7 @@ Crée une version immuable à partir de l'état enregistré (`201`). `422` si la
 
 | Parameter       | Type      | Description                                          |
 | :-------------- | :-------- | :--------------------------------------------------- |
-| `Authorization` | `string`  | **Required**. En-tête `Bearer <SIGNAGE_ADMIN_TOKEN>` |
+| `Authorization` | `string`  | **Required**. En-tête `Bearer <TTSCREEN_ADMIN_TOKEN>` |
 | `id`            | `integer` | **Required**. Identifiant de la playlist             |
 
 Du plus ancien au plus récent, au même format que la réponse de publication.
@@ -503,7 +552,7 @@ Du plus ancien au plus récent, au même format que la réponse de publication.
 
 | Parameter       | Type      | Description                                          |
 | :-------------- | :-------- | :--------------------------------------------------- |
-| `Authorization` | `string`  | **Required**. En-tête `Bearer <SIGNAGE_ADMIN_TOKEN>` |
+| `Authorization` | `string`  | **Required**. En-tête `Bearer <TTSCREEN_ADMIN_TOKEN>` |
 | `id`            | `integer` | **Required**. Identifiant de la **version**          |
 
 Contenu exact de la version, au [format manifeste](#format-du-manifeste).
@@ -518,7 +567,7 @@ Contenu exact de la version, au [format manifeste](#format-du-manifeste).
 
 | Parameter       | Type     | Description                                          |
 | :-------------- | :------- | :--------------------------------------------------- |
-| `Authorization` | `string` | **Required**. En-tête `Bearer <SIGNAGE_ADMIN_TOKEN>` |
+| `Authorization` | `string` | **Required**. En-tête `Bearer <TTSCREEN_ADMIN_TOKEN>` |
 | `name`          | `string` | **Required**. Nom de l'écran (1 à 120 caractères)    |
 
 Renvoie `201` avec l'écran et son **`token`, affiché une seule fois** :
@@ -536,7 +585,7 @@ Renvoie `201` avec l'écran et son **`token`, affiché une seule fois** :
 
 | Parameter       | Type     | Description                                          |
 | :-------------- | :------- | :--------------------------------------------------- |
-| `Authorization` | `string` | **Required**. En-tête `Bearer <SIGNAGE_ADMIN_TOKEN>` |
+| `Authorization` | `string` | **Required**. En-tête `Bearer <TTSCREEN_ADMIN_TOKEN>` |
 
 Chaque écran a la forme `{"id", "name", "version_id", "online", "last_seen", "has_token"}`. `online` vaut `true` si le lecteur a interrogé le serveur dans les 60 dernières secondes ; `last_seen` est en UTC.
 
@@ -548,7 +597,7 @@ Chaque écran a la forme `{"id", "name", "version_id", "online", "last_seen", "h
 
 | Parameter       | Type              | Description                                                           |
 | :-------------- | :---------------- | :-------------------------------------------------------------------- |
-| `Authorization` | `string`          | **Required**. En-tête `Bearer <SIGNAGE_ADMIN_TOKEN>`                  |
+| `Authorization` | `string`          | **Required**. En-tête `Bearer <TTSCREEN_ADMIN_TOKEN>`                  |
 | `id`            | `integer`         | **Required**. Identifiant de l'écran                                  |
 | `version_id`    | `integer \| null` | **Required**. Version à diffuser ; `null` retire l'affectation (corps JSON) |
 
@@ -562,7 +611,7 @@ Revenir en arrière = affecter une ancienne version.
 
 | Parameter       | Type      | Description                                          |
 | :-------------- | :-------- | :--------------------------------------------------- |
-| `Authorization` | `string`  | **Required**. En-tête `Bearer <SIGNAGE_ADMIN_TOKEN>` |
+| `Authorization` | `string`  | **Required**. En-tête `Bearer <TTSCREEN_ADMIN_TOKEN>` |
 | `id`            | `integer` | **Required**. Identifiant de l'écran                 |
 
 Renvoie la version affectée au [format manifeste](#format-du-manifeste), **sans** marquer l'écran comme connecté. `404` si rien n'est affecté.
@@ -575,7 +624,7 @@ Renvoie la version affectée au [format manifeste](#format-du-manifeste), **sans
 
 | Parameter       | Type      | Description                                          |
 | :-------------- | :-------- | :--------------------------------------------------- |
-| `Authorization` | `string`  | **Required**. En-tête `Bearer <SIGNAGE_ADMIN_TOKEN>` |
+| `Authorization` | `string`  | **Required**. En-tête `Bearer <TTSCREEN_ADMIN_TOKEN>` |
 | `id`            | `integer` | **Required**. Identifiant de l'écran                 |
 
 L'ancien jeton cesse de fonctionner immédiatement. Le nouveau est renvoyé dans le champ `token`, une seule fois.
@@ -588,7 +637,7 @@ L'ancien jeton cesse de fonctionner immédiatement. Le nouveau est renvoyé dans
 
 | Parameter       | Type      | Description                                          |
 | :-------------- | :-------- | :--------------------------------------------------- |
-| `Authorization` | `string`  | **Required**. En-tête `Bearer <SIGNAGE_ADMIN_TOKEN>` |
+| `Authorization` | `string`  | **Required**. En-tête `Bearer <TTSCREEN_ADMIN_TOKEN>` |
 | `id`            | `integer` | **Required**. Identifiant de l'écran                 |
 
 L'écran ne peut plus se connecter. Pour le réactiver, générez un nouveau jeton.
@@ -664,16 +713,16 @@ Architecture : **Caddy** (HTTPS automatique, sert directement les médias) → *
    ```bash
    cp deploy/.env.example deploy/.env
    python3 -c "import secrets; print(secrets.token_urlsafe(32))"   # à lancer deux fois
-   nano deploy/.env      # DOMAIN, SIGNAGE_ADMIN_TOKEN, POSTGRES_PASSWORD
+   nano deploy/.env      # DOMAIN, TTSCREEN_ADMIN_TOKEN, POSTGRES_PASSWORD
    ```
 4. Démarrez :
    ```bash
    docker compose -f deploy/docker-compose.prod.yml up -d --build
    docker compose -f deploy/docker-compose.prod.yml logs -f
    ```
-5. Ouvrez `https://VOTRE-DOMAINE/` et connectez-vous avec `SIGNAGE_ADMIN_TOKEN`.
+5. Ouvrez `https://VOTRE-DOMAINE/` et connectez-vous avec `TTSCREEN_ADMIN_TOKEN`.
 
-En production (`SIGNAGE_ENV=production`), l'API **refuse de démarrer** si le jeton admin est celui par défaut ou fait moins de 24 caractères.
+En production (`TTSCREEN_ENV=production`), l'API **refuse de démarrer** si le jeton admin est celui par défaut ou fait moins de 24 caractères.
 
 Sur le serveur, ne publiez pas le port 8000 : l'API n'est joignable que par Caddy.
 
@@ -687,10 +736,10 @@ Sur le serveur, ne publiez pas le port 8000 : l'API n'est joignable que par Cadd
 
 **Restauration** de la base : 
 ```bash
-gunzip -c backups/db-AAAA-MM-JJ-HHMM.sql.gz | docker compose -f deploy/docker-compose.prod.yml exec -T db psql -U signage signage
+gunzip -c backups/db-AAAA-MM-JJ-HHMM.sql.gz | docker compose -f deploy/docker-compose.prod.yml exec -T db psql -U ttscreen ttscreen
 ```
 
-. Pour les médias, extrayez l'archive `.tgz` dans le volume `signage_media`. Testez une restauration avant d'en avoir besoin.
+. Pour les médias, extrayez l'archive `.tgz` dans le volume `ttscreen_media`. Testez une restauration avant d'en avoir besoin.
 
 **Mise à jour** :
 ```bash
@@ -703,17 +752,19 @@ Il n'y a pas encore de migrations automatiques du schéma : lisez les notes de v
 ## Sécurité
 
 Déjà en place :
-- Routes d'administration protégées par jeton ; un jeton d'écran ne donne aucun droit d'administration.
+- Routes d'administration protégées par compte ou jeton ; un jeton d'écran ne donne aucun droit d'administration.
+- **Comptes utilisateurs et rôles** : `admin` (tout), `editor` (contenu, publication, écrans), `viewer` (lecture seule). Mots de passe hachés en PBKDF2-HMAC-SHA256 (jamais en clair), sessions stockées hachées, révoquables et à durée limitée (`TTSCREEN_SESSION_TTL_H`). Le jeton admin historique (`TTSCREEN_ADMIN_TOKEN`) reste accepté et équivaut à un admin.
+- **Journal d'audit** : les opérations sensibles (connexions, publications, affectations, gestion des écrans et des comptes…) sont tracées avec auteur, date et IP (`GET /api/audit`).
+- **Limitation de débit** : fenêtre glissante par IP sur l'API, par jeton d'écran sur `/api/player/manifest`, et limite stricte sur les connexions (anti force brute). `429` + `Retry-After` au-delà.
 - Jeton distinct par écran, haché en base, renouvelable et révocable.
 - Téléversements validés (type réel, taille maximale, écriture atomique).
 - Conteneur API sans privilèges, en lecture seule ; secrets hors Git ; refus de démarrer avec un jeton faible en production.
 - En-têtes de sécurité et HTTPS via Caddy.
 
 Limites actuelles, à connaître :
-- Un **seul jeton admin partagé** : pas encore de comptes, de rôles ni de journal d'audit (ce qui est suffisant pour une utilisation classique).
-- **Pas de limitation de débit** sur l'API.
+- La limitation de débit est **en mémoire** (un seul processus uvicorn) ; prévoir un compteur partagé (Redis) si vous passez à plusieurs workers.
 - Les médias sous `/files/` sont lisibles sans authentification (noms non devinables). Des URL signées sont prévues.
-- Le jeton admin saisi dans l'interface est conservé dans le `sessionStorage` du navigateur (effacé à la fermeture de l'onglet).
+- Le jeton de session saisi dans l'interface est conservé dans le `sessionStorage` du navigateur (effacé à la fermeture de l'onglet).
 
 Pour signaler une faille, n'ouvrez pas de ticket public : écrivez à l'adresse de la section [Contact](#contact).
 
@@ -759,7 +810,7 @@ Affectez à l'écran l'ancienne version. Les versions publiées ne sont jamais m
 Il n'est pas récupérable (seul son hachage est stocké). Cliquez sur **Nouveau jeton** : l'ancien cesse de fonctionner et vous en recevez un nouveau, à remettre dans l'adresse du lecteur de l'écran.
 
 **J'ai perdu le jeton admin.**
-C'est la valeur de `SIGNAGE_ADMIN_TOKEN` dans votre `.env` (ou `deploy/.env` en production). Pour le changer, modifiez-la et redémarrez l'API.
+C'est la valeur de `TTSCREEN_ADMIN_TOKEN` dans votre `.env` (ou `deploy/.env` en production). Pour le changer, modifiez-la et redémarrez l'API.
 
 **Les vidéos ne démarrent pas sur l'écran.**
 Lancez Chromium avec `--autoplay-policy=no-user-gesture-required` et vérifiez que le format est MP4 (H.264) ou WebM lisible par le Raspberry Pi / mini-PC.

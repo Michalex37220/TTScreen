@@ -12,8 +12,8 @@ COPY backend/app ./app
 COPY frontend ./frontend
 COPY player ./player
 ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 \
-    SIGNAGE_FRONTEND_DIR=/app/frontend SIGNAGE_PLAYER_DIR=/app/player \
-    SIGNAGE_MEDIA_DIR=/data/media SIGNAGE_DATABASE_URL=sqlite:////data/signage.db
+    TTSCREEN_FRONTEND_DIR=/app/frontend TTSCREEN_PLAYER_DIR=/app/player \
+    TTSCREEN_MEDIA_DIR=/data/media TTSCREEN_DATABASE_URL=sqlite:////data/ttscreen.db
 USER app
 EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s \

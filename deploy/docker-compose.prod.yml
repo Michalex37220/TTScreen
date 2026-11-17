@@ -5,13 +5,13 @@ services:
   db:
     image: postgres:17-alpine
     environment:
-      POSTGRES_USER: signage
-      POSTGRES_DB: signage
+      POSTGRES_USER: ttscreen
+      POSTGRES_DB: ttscreen
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?définir POSTGRES_PASSWORD dans deploy/.env}
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U signage -d signage"]
+      test: ["CMD-SHELL", "pg_isready -U ttscreen -d ttscreen"]
       interval: 5s
       timeout: 3s
       retries: 10
@@ -20,9 +20,9 @@ services:
   api:
     build: { context: .., dockerfile: deploy/Dockerfile }
     environment:
-      SIGNAGE_ENV: production
-      SIGNAGE_ADMIN_TOKEN: ${SIGNAGE_ADMIN_TOKEN:?définir SIGNAGE_ADMIN_TOKEN dans deploy/.env}
-      SIGNAGE_DATABASE_URL: postgresql+psycopg://signage:${POSTGRES_PASSWORD}@db:5432/signage
+      TTSCREEN_ENV: production
+      TTSCREEN_ADMIN_TOKEN: ${TTSCREEN_ADMIN_TOKEN:?définir TTSCREEN_ADMIN_TOKEN dans deploy/.env}
+      TTSCREEN_DATABASE_URL: postgresql+psycopg://ttscreen:${POSTGRES_PASSWORD}@db:5432/ttscreen
     volumes:
       - media:/data/media
     depends_on:

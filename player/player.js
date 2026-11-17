@@ -16,10 +16,10 @@
   if (params.get("token")) {
     source = { url: "/api/player/manifest", headers: { Authorization: "Bearer " + params.get("token") }, preview: false };
   } else if (adminUrl) {
-    let admin = sessionStorage.getItem("signage_admin");
+    let admin = sessionStorage.getItem("ttscreen_admin");
     if (!admin) {
       admin = prompt("Jeton admin (prévisualisation) :") || "";
-      sessionStorage.setItem("signage_admin", admin);
+      sessionStorage.setItem("ttscreen_admin", admin);
     }
     source = { url: adminUrl, headers: { Authorization: "Bearer " + admin }, preview: true };
   } else {
@@ -44,7 +44,7 @@
   async function fetchManifest() {
     try {
       const r = await fetch(source.url, { headers: source.headers, cache: "no-store" });
-      if (r.status === 401) { if (source.preview) sessionStorage.removeItem("signage_admin"); return { error: "Accès refusé (jeton invalide)" }; }
+      if (r.status === 401) { if (source.preview) sessionStorage.removeItem("ttscreen_admin"); return { error: "Accès refusé (jeton invalide)" }; }
       if (r.status === 404) return { error: "Aucune version affectée" };
       if (!r.ok) return { error: "Erreur " + r.status };
       return { data: await r.json() };

@@ -1,5 +1,5 @@
 {
-  description = "Digital signage - environnement de développement reproductible";
+  description = "Digital ttscreen - environnement de développement reproductible";
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
@@ -22,8 +22,8 @@
             pkgs.sqlite
           ];
           shellHook = ''
-            export SIGNAGE_ROOT="$PWD"
-            echo "Signage dev shell prêt : ./scripts/dev.sh | ./scripts/test.sh"
+            export TTSCREEN_ROOT="$PWD"
+            echo "TTScreen dev shell prêt : ./scripts/dev.sh | ./scripts/test.sh"
           '';
         };
       });

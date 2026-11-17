@@ -4,24 +4,37 @@ from __future__ import annotations
 import secrets
 from datetime import timedelta
 
-from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, RedirectResponse
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from . import publishing
-from .deps import get_db, hash_token, require_admin, require_screen
-from .models import Media, Playlist, PlaylistItem, PlaylistVersion, Screen, utcnow
-from .schemas import (AssignIn, ItemIn, MediaOut, PlaylistIn, PlaylistOut, ScreenCreated,
-                      ScreenIn, ScreenOut, VersionOut)
+from .audit import log_action
+from .auth import Principal, create_session, drop_sessions, hash_password, verify_password
+from .deps import (get_bearer, get_db, get_principal, hash_token, require_admin,
+                   require_editor, require_viewer, require_screen)
+from .models import (AuditLog, Media, Playlist, PlaylistItem, PlaylistVersion, Screen, User,
+                     UserSession, utcnow)
+from .schemas import (AssignIn, AuditOut, ItemIn, LoginIn, MediaOut, MeOut, PlaylistIn, PlaylistOut,
+                      ScreenCreated, ScreenIn, ScreenOut, SessionOut, UserIn, UserOut, UserPatch,
+                      VersionOut)
 from .storage import save_upload
 
 ONLINE_WINDOW = timedelta(seconds=60)
 DEFAULT_DURATION = 10
 
+# Les routes d'administration sont découpées en trois routers selon le rôle minimal exigé :
+# - viewer (lecture seule) : lister les médias/playlists/versions/écrans, prévisualiser
+# - editor : en plus, créer/modifier le contenu, publier, gérer les écrans
+# - admin  : en plus, gérer les comptes et consulter le journal d'audit
+# Le jeton admin historique (TTSCREEN_ADMIN_TOKEN) a le rôle admin et ouvre les trois routers.
+public = APIRouter()
+auth = APIRouter(prefix="/api/auth")
+viewer = APIRouter(prefix="/api", dependencies=[Depends(require_viewer)])
+editor = APIRouter(prefix="/api", dependencies=[Depends(require_editor)])
 admin = APIRouter(prefix="/api", dependencies=[Depends(require_admin)])
 player = APIRouter(prefix="/api/player")
-public = APIRouter()
 
 
 # ---------- helpers ----------
@@ -64,28 +77,80 @@ def get_file(stored_name: str, request: Request):
     return FileResponse(path, headers={"X-Content-Type-Options": "nosniff"})
 
 
+# ---------- authentification (comptes, sessions, rôles) ----------
+@public.post("/api/auth/login", response_model=SessionOut)
+def login(body: LoginIn, request: Request, db: Session = Depends(get_db)):
+    """Connexion. Deux modes :
+    - `username` + `password` : compte nommé → jeton de session (haché en base, révocable, durée limitée) ;
+    - `token` seul : jeton admin historique TTSCREEN_ADMIN_TOKEN → renvoyé tel quel (pas de session en base).
+    Les connexions réussies et échouées sont journalisées (table audit_log).
+    """
+    s = request.app.state.settings
+    if body.token is not None and not body.username:
+        if secrets.compare_digest(body.token, s.admin_token):
+            log_action(db, request, Principal("admin", "admin", legacy=True), "connexion", target="jeton admin")
+            db.commit()
+            return SessionOut(token=body.token, username="admin", role="admin", expires_at=None)
+        log_action(db, request, None, "connexion_echouee", target="jeton admin")
+        db.commit()
+        raise HTTPException(401, "Identifiants invalides")
+    # Compte nommé : même message d'erreur dans tous les cas pour ne pas révéler quel identifiant existe
+    user = db.scalar(select(User).where(User.username == (body.username or "")))
+    if user is None or not user.active or not verify_password(body.password or "", user.password_hash):
+        log_action(db, request, None, "connexion_echouee", target=body.username)
+        db.commit()
+        raise HTTPException(401, "Identifiants invalides")
+    user.last_login = utcnow()
+    token, expires_at = create_session(db, user, timedelta(hours=s.session_ttl_h))
+    log_action(db, request, Principal(user.username, user.role, legacy=False), "connexion", target=user.username)
+    db.commit()
+    return SessionOut(token=token, username=user.username, role=user.role, expires_at=expires_at)
+
+
+@auth.post("/logout", status_code=204, dependencies=[Depends(require_viewer)])
+def logout(request: Request, token: str | None = Depends(get_bearer),
+           principal: Principal = Depends(get_principal), db: Session = Depends(get_db)):
+    """Révoque la session courante : le jeton cesse immédiatement de fonctionner."""
+    if not principal.legacy:  # le jeton admin historique n'a pas de session en base
+        session = db.scalar(select(UserSession).where(UserSession.token_hash == hash_token(token)))
+        if session is not None:
+            db.delete(session)
+    log_action(db, request, principal, "deconnexion", target=principal.username)
+    db.commit()
+
+
+@auth.get("/me", response_model=MeOut, dependencies=[Depends(require_viewer)])
+def me(principal: Principal = Depends(get_principal)):
+    """Identité derrière le jeton courant (l'interface s'en sert pour afficher le rôle et masquer l'onglet Comptes)."""
+    return MeOut(username=principal.username, role=principal.role, legacy=principal.legacy)
+
+
 # ---------- médias ----------
-@admin.post("/media", response_model=MediaOut)
-def upload_media(request: Request, file: UploadFile = File(...), db: Session = Depends(get_db)):
+@editor.post("/media", response_model=MediaOut)
+def upload_media(request: Request, file: UploadFile = File(...),
+                 principal: Principal = Depends(get_principal), db: Session = Depends(get_db)):
     s = request.app.state.settings
     info = save_upload(file, s.media_dir, s.max_upload_mb * 1024 * 1024)
     existing = db.scalar(select(Media).where(Media.sha256 == info["sha256"]))
     if existing:
-        return _media_out(existing)
+        return _media_out(existing)  # doublon : rien n'est écrit ni journalisé
     name = (file.filename or "fichier")[:255]
     m = Media(original_name=name, **info)
     db.add(m)
+    log_action(db, request, principal, "media.upload", target=name,
+               detail=f"{info['kind']}, {info['size']} o, sha256={info['sha256'][:12]}…")
     db.commit()
     return _media_out(m)
 
 
-@admin.get("/media", response_model=list[MediaOut])
+@viewer.get("/media", response_model=list[MediaOut])
 def list_media(db: Session = Depends(get_db)):
     return [_media_out(m) for m in db.scalars(select(Media).order_by(Media.id.desc()))]
 
 
-@admin.delete("/media/{media_id}", status_code=204)
-def delete_media(media_id: int, request: Request, db: Session = Depends(get_db)):
+@editor.delete("/media/{media_id}", status_code=204)
+def delete_media(media_id: int, request: Request, principal: Principal = Depends(get_principal),
+                 db: Session = Depends(get_db)):
     m = db.get(Media, media_id)
     if m is None:
         raise HTTPException(404, "Média introuvable")
@@ -95,50 +160,58 @@ def delete_media(media_id: int, request: Request, db: Session = Depends(get_db))
         if media_id in v.media_ids:
             raise HTTPException(409, "Média utilisé dans une version publiée")
     path = request.app.state.settings.media_dir / m.stored_name
+    log_action(db, request, principal, "media.delete", target=m.original_name)
     db.delete(m)
     db.commit()
     path.unlink(missing_ok=True)
 
 
 # ---------- playlists ----------
-@admin.post("/playlists", response_model=PlaylistOut, status_code=201)
-def create_playlist(body: PlaylistIn, db: Session = Depends(get_db)):
+@editor.post("/playlists", response_model=PlaylistOut, status_code=201)
+def create_playlist(body: PlaylistIn, request: Request, principal: Principal = Depends(get_principal),
+                    db: Session = Depends(get_db)):
     p = Playlist(name=body.name)
     db.add(p)
+    log_action(db, request, principal, "playlist.create", target=body.name)
     db.commit()
     return p
 
 
-@admin.get("/playlists", response_model=list[PlaylistOut])
+@viewer.get("/playlists", response_model=list[PlaylistOut])
 def list_playlists(db: Session = Depends(get_db)):
     return list(db.scalars(select(Playlist).order_by(Playlist.id)))
 
 
-@admin.get("/playlists/{pid}", response_model=PlaylistOut)
+@viewer.get("/playlists/{pid}", response_model=PlaylistOut)
 def get_playlist(pid: int, db: Session = Depends(get_db)):
     return _playlist(db, pid)
 
 
-@admin.put("/playlists/{pid}", response_model=PlaylistOut)
-def rename_playlist(pid: int, body: PlaylistIn, db: Session = Depends(get_db)):
+@editor.put("/playlists/{pid}", response_model=PlaylistOut)
+def rename_playlist(pid: int, body: PlaylistIn, request: Request,
+                    principal: Principal = Depends(get_principal), db: Session = Depends(get_db)):
     p = _playlist(db, pid)
     p.name = body.name
+    log_action(db, request, principal, "playlist.rename", target=f"playlist:{pid}", detail=body.name)
     db.commit()
     return p
 
 
-@admin.delete("/playlists/{pid}", status_code=204)
-def delete_playlist(pid: int, db: Session = Depends(get_db)):
+@editor.delete("/playlists/{pid}", status_code=204)
+def delete_playlist(pid: int, request: Request, principal: Principal = Depends(get_principal),
+                    db: Session = Depends(get_db)):
     p = _playlist(db, pid)
     vids = [v.id for v in p.versions]
     if vids and db.scalar(select(Screen.id).where(Screen.version_id.in_(vids)).limit(1)):
         raise HTTPException(409, "Une version de cette playlist est affectée à un écran")
+    log_action(db, request, principal, "playlist.delete", target=f"playlist:{pid}", detail=p.name)
     db.delete(p)
     db.commit()
 
 
-@admin.put("/playlists/{pid}/items", response_model=PlaylistOut)
-def set_items(pid: int, items: list[ItemIn], db: Session = Depends(get_db)):
+@editor.put("/playlists/{pid}/items", response_model=PlaylistOut)
+def set_items(pid: int, items: list[ItemIn], request: Request, principal: Principal = Depends(get_principal),
+              db: Session = Depends(get_db)):
     """Remplace la liste ordonnée complète des éléments (l'ordre du tableau = l'ordre de lecture)."""
     p = _playlist(db, pid)
     new = []
@@ -158,33 +231,40 @@ def set_items(pid: int, items: list[ItemIn], db: Session = Depends(get_db)):
         new.append(PlaylistItem(position=pos, type=it.type, text=it.text if it.type == "text" else None,
                                 media_id=media_id, duration_s=duration))
     p.items = new
+    log_action(db, request, principal, "playlist.items", target=f"playlist:{pid}",
+               detail=f"{len(items)} élément(s)")
     db.commit()
     return p
 
 
 # ---------- publication ----------
-@admin.post("/playlists/{pid}/publish", response_model=VersionOut, status_code=201)
-def publish_playlist(pid: int, db: Session = Depends(get_db)):
+@editor.post("/playlists/{pid}/publish", response_model=VersionOut, status_code=201)
+def publish_playlist(pid: int, request: Request, principal: Principal = Depends(get_principal),
+                     db: Session = Depends(get_db)):
     p = _playlist(db, pid)
     try:
-        return publishing.publish(db, p)
+        version = publishing.publish(db, p)
     except ValueError as e:
         raise HTTPException(422, str(e))
+    # Opération sensible : on la trace dans le journal (même transaction que la publication)
+    log_action(db, request, principal, "playlist.publish", target=f"playlist:{pid}", detail=f"v{version.number}")
+    db.commit()
+    return version
 
 
-@admin.get("/playlists/{pid}/preview")
+@viewer.get("/playlists/{pid}/preview")
 def preview_draft(pid: int, db: Session = Depends(get_db)):
     """Brouillon courant au format lecteur, sans rien publier."""
     manifest, _ = publishing.build_manifest(_playlist(db, pid))
     return {"version_id": None, "number": None, **manifest}
 
 
-@admin.get("/playlists/{pid}/versions", response_model=list[VersionOut])
+@viewer.get("/playlists/{pid}/versions", response_model=list[VersionOut])
 def list_versions(pid: int, db: Session = Depends(get_db)):
     return _playlist(db, pid).versions
 
 
-@admin.get("/versions/{vid}")
+@viewer.get("/versions/{vid}")
 def get_version(vid: int, db: Session = Depends(get_db)):
     """Contenu exact d'une version (prévisualisation / test avant déploiement)."""
     v = db.get(PlaylistVersion, vid)
@@ -194,22 +274,25 @@ def get_version(vid: int, db: Session = Depends(get_db)):
 
 
 # ---------- écrans ----------
-@admin.post("/screens", response_model=ScreenCreated, status_code=201)
-def create_screen(body: ScreenIn, db: Session = Depends(get_db)):
+@editor.post("/screens", response_model=ScreenCreated, status_code=201)
+def create_screen(body: ScreenIn, request: Request, principal: Principal = Depends(get_principal),
+                  db: Session = Depends(get_db)):
     token = secrets.token_urlsafe(32)
     s = Screen(name=body.name, token_hash=hash_token(token))
     db.add(s)
+    log_action(db, request, principal, "screen.create", target=body.name)
     db.commit()
     return {**_screen_out(s), "token": token}
 
 
-@admin.get("/screens", response_model=list[ScreenOut])
+@viewer.get("/screens", response_model=list[ScreenOut])
 def list_screens(db: Session = Depends(get_db)):
     return [_screen_out(s) for s in db.scalars(select(Screen).order_by(Screen.id))]
 
 
-@admin.post("/screens/{sid}/assign", response_model=ScreenOut)
-def assign_version(sid: int, body: AssignIn, db: Session = Depends(get_db)):
+@editor.post("/screens/{sid}/assign", response_model=ScreenOut)
+def assign_version(sid: int, body: AssignIn, request: Request,
+                   principal: Principal = Depends(get_principal), db: Session = Depends(get_db)):
     """Affecte une version à un écran. Revenir en arrière = affecter une version antérieure."""
     s = db.get(Screen, sid)
     if s is None:
@@ -217,11 +300,13 @@ def assign_version(sid: int, body: AssignIn, db: Session = Depends(get_db)):
     if body.version_id is not None and db.get(PlaylistVersion, body.version_id) is None:
         raise HTTPException(404, "Version introuvable")
     s.version_id = body.version_id
+    log_action(db, request, principal, "screen.assign", target=f"screen:{sid}",
+               detail=f"version_id={body.version_id}")
     db.commit()
     return _screen_out(s)
 
 
-@admin.get("/screens/{sid}/manifest")
+@viewer.get("/screens/{sid}/manifest")
 def screen_preview(sid: int, db: Session = Depends(get_db)):
     """Ce que voit l'écran (version affectée), sans le marquer comme connecté."""
     s = db.get(Screen, sid)
@@ -232,25 +317,118 @@ def screen_preview(sid: int, db: Session = Depends(get_db)):
     return publishing.player_payload(db.get(PlaylistVersion, s.version_id))
 
 
-@admin.post("/screens/{sid}/rotate-token", response_model=ScreenCreated)
-def rotate_token(sid: int, db: Session = Depends(get_db)):
+@editor.post("/screens/{sid}/rotate-token", response_model=ScreenCreated)
+def rotate_token(sid: int, request: Request, principal: Principal = Depends(get_principal),
+                 db: Session = Depends(get_db)):
+    """Génère un nouveau jeton d'écran : l'ancien cesse de fonctionner immédiatement."""
     s = db.get(Screen, sid)
     if s is None:
         raise HTTPException(404, "Écran introuvable")
     token = secrets.token_urlsafe(32)
     s.token_hash = hash_token(token)
+    log_action(db, request, principal, "screen.rotate_token", target=f"screen:{sid}")
     db.commit()
     return {**_screen_out(s), "token": token}
 
 
-@admin.post("/screens/{sid}/revoke-token", response_model=ScreenOut)
-def revoke_token(sid: int, db: Session = Depends(get_db)):
+@editor.post("/screens/{sid}/revoke-token", response_model=ScreenOut)
+def revoke_token(sid: int, request: Request, principal: Principal = Depends(get_principal),
+                 db: Session = Depends(get_db)):
     s = db.get(Screen, sid)
     if s is None:
         raise HTTPException(404, "Écran introuvable")
     s.token_hash = None
+    log_action(db, request, principal, "screen.revoke_token", target=f"screen:{sid}")
     db.commit()
     return _screen_out(s)
+
+
+# ---------- comptes utilisateurs (rôle admin uniquement) ----------
+@admin.post("/users", response_model=UserOut, status_code=201)
+def create_user(body: UserIn, request: Request, principal: Principal = Depends(get_principal),
+                db: Session = Depends(get_db)):
+    """Crée un compte. Le mot de passe n'est jamais stocké en clair (haché PBKDF2, voir auth.py)."""
+    if db.scalar(select(User).where(User.username == body.username)):
+        raise HTTPException(409, "Nom d'utilisateur déjà pris")
+    u = User(username=body.username, password_hash=hash_password(body.password), role=body.role)
+    db.add(u)
+    log_action(db, request, principal, "user.create", target=u.username, detail=f"rôle={u.role}")
+    db.commit()
+    return u
+
+
+@admin.get("/users", response_model=list[UserOut])
+def list_users(db: Session = Depends(get_db)):
+    return list(db.scalars(select(User).order_by(User.id)))
+
+
+@admin.patch("/users/{uid}", response_model=UserOut)
+def update_user(uid: int, body: UserPatch, request: Request,
+                principal: Principal = Depends(get_principal), db: Session = Depends(get_db)):
+    """Modifie un compte (rôle, état actif, mot de passe).
+
+    Règles de protection : on ne peut pas se désactiver soi-même, et il doit toujours
+    rester au moins un administrateur actif. Toute modification révoque les sessions
+    existantes du compte (reconnexion obligatoire).
+    """
+    u = db.get(User, uid)
+    if u is None:
+        raise HTTPException(404, "Utilisateur introuvable")
+    if u.username == principal.username and body.active is False:
+        raise HTTPException(409, "Vous ne pouvez pas désactiver votre propre compte")
+    new_role = body.role if body.role is not None else u.role
+    new_active = body.active if body.active is not None else u.active
+    if u.role == "admin" and (not new_active or new_role != "admin"):
+        others = db.scalar(select(func.count(User.id)).where(
+            User.role == "admin", User.active.is_(True), User.id != u.id))
+        if not others:
+            raise HTTPException(409, "Il doit rester au moins un administrateur actif")
+    if body.role is not None:
+        u.role = body.role
+    if body.active is not None:
+        u.active = body.active
+    if body.password is not None:
+        u.password_hash = hash_password(body.password)
+    drop_sessions(db, u.id)
+    log_action(db, request, principal, "user.update", target=u.username,
+               detail=f"rôle={u.role}, actif={u.active}" + (", mot de passe changé" if body.password else ""))
+    db.commit()
+    return u
+
+
+@admin.delete("/users/{uid}", status_code=204)
+def delete_user(uid: int, request: Request, principal: Principal = Depends(get_principal),
+                db: Session = Depends(get_db)):
+    """Supprime un compte (et révoque ses sessions). Interdit de se supprimer soi-même
+    ou de supprimer le dernier administrateur actif."""
+    u = db.get(User, uid)
+    if u is None:
+        raise HTTPException(404, "Utilisateur introuvable")
+    if u.username == principal.username:
+        raise HTTPException(409, "Vous ne pouvez pas supprimer votre propre compte")
+    if u.role == "admin":
+        others = db.scalar(select(func.count(User.id)).where(
+            User.role == "admin", User.active.is_(True), User.id != u.id))
+        if not others:
+            raise HTTPException(409, "Impossible de supprimer le dernier administrateur actif")
+    drop_sessions(db, u.id)
+    log_action(db, request, principal, "user.delete", target=u.username)
+    db.delete(u)
+    db.commit()
+
+
+# ---------- journal des opérations sensibles (rôle admin uniquement) ----------
+@admin.get("/audit", response_model=list[AuditOut])
+def list_audit(action: str | None = Query(default=None),
+               limit: int = Query(default=100, ge=1, le=1000),
+               offset: int = Query(default=0, ge=0),
+               db: Session = Depends(get_db)):
+    """Journal des opérations sensibles, du plus récent au plus ancien.
+    Filtre optionnel par `action` (ex. action=playlist.publish)."""
+    q = select(AuditLog).order_by(AuditLog.id.desc())
+    if action:
+        q = q.where(AuditLog.action == action)
+    return list(db.scalars(q.offset(offset).limit(limit)))
 
 
 # ---------- lecteur ----------

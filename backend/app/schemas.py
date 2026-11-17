@@ -65,3 +65,58 @@ class ScreenCreated(ScreenOut):
 
 class AssignIn(BaseModel):
     version_id: int | None
+
+
+# ---------- comptes, sessions et journal ----------
+class LoginIn(BaseModel):
+    """Deux modes de connexion : compte nommé (username + password) ou jeton admin
+    historique (token seul, si aucun compte n'existe encore)."""
+
+    username: str | None = Field(default=None, max_length=50)
+    password: str | None = Field(default=None, max_length=255)
+    token: str | None = Field(default=None, max_length=255)
+
+
+class SessionOut(BaseModel):
+    token: str                    # jeton de session à renvoyer en Bearer (affiché une seule fois)
+    username: str
+    role: str
+    expires_at: datetime | None   # None pour le jeton admin historique (pas de session en base)
+
+
+class MeOut(BaseModel):
+    username: str
+    role: str
+    legacy: bool                  # True = authentifié avec le jeton admin historique
+
+
+class UserIn(BaseModel):
+    username: str = Field(min_length=3, max_length=50, pattern=r"^[A-Za-z0-9_.-]+$")
+    password: str = Field(min_length=8, max_length=255)  # 8 caractères minimum : refuse les mots de passe triviaux
+    role: Literal["viewer", "editor", "admin"] = "viewer"
+
+
+class UserPatch(BaseModel):
+    role: Literal["viewer", "editor", "admin"] | None = None
+    active: bool | None = None
+    password: str | None = Field(default=None, min_length=8, max_length=255)
+
+
+class UserOut(BaseModel):
+    id: int
+    username: str
+    role: str
+    active: bool
+    created_at: datetime
+    last_login: datetime | None
+
+
+class AuditOut(BaseModel):
+    id: int
+    created_at: datetime
+    username: str
+    role: str | None
+    action: str
+    target: str | None
+    detail: str | None
+    ip: str | None

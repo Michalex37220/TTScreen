@@ -4,11 +4,11 @@ services:
   api:
     build: { context: .., dockerfile: deploy/Dockerfile }
     environment:
-      SIGNAGE_ADMIN_TOKEN: ${SIGNAGE_ADMIN_TOKEN:-dev-admin-token}
+      TTSCREEN_ADMIN_TOKEN: ${TTSCREEN_ADMIN_TOKEN:-dev-admin-token}
     volumes:
       - data:/data
     ports:
       - "127.0.0.1:8000:8000" # a modifier si jamais vous voulez pouvoir y acceder sur le réseau local et non pas seulement la machine
-    restart: unless-stopped
+    restart: no 
 volumes:
   data:

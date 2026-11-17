@@ -3,9 +3,10 @@
 "use strict";
 
 const state = {
-  token: sessionStorage.getItem("signage_admin") || "",
+  token: sessionStorage.getItem("ttscreen_admin") || "",
+  me: null,  // identité renvoyée par /api/auth/me (username, role, legacy) : sert à afficher l'onglet Comptes
   view: "playlists",
-  playlists: [], media: [], screens: [], versions: {},
+  playlists: [], media: [], screens: [], versions: {}, users: [], audit: [],
   selectedPid: null, draft: [], dirty: false, previewSrc: null,
 };
 const app = document.getElementById("app");
@@ -84,37 +85,54 @@ const allVersions = () => state.playlists.flatMap((p) => (state.versions[p.id] |
 const versionLabel = (id) => { const v = allVersions().find((x) => x.id === id); return v ? `${v.pname} · v${v.number}` : "—"; };
 
 // ---------- connexion ----------
+// Deux modes acceptés par POST /api/auth/login :
+// - identifiant + mot de passe d'un compte nommé (créé dans l'onglet Comptes) ;
+// - si le champ identifiant est vide, le champ mot de passe est traité comme le jeton
+//   admin historique (TTSCREEN_ADMIN_TOKEN), pour compatibilité avec l'ancien usage.
 function logout() {
-  sessionStorage.removeItem("signage_admin");
+  // Déconnexion aussi côté serveur : révoque la session (le jeton cesse de fonctionner)
+  if (state.token) fetch("/api/auth/logout", { method: "POST", headers: { Authorization: "Bearer " + state.token } }).catch(() => {});
+  sessionStorage.removeItem("ttscreen_admin");
   state.token = "";
+  state.me = null;
   renderLogin();
 }
 function renderLogin(message = "") {
-  const input = h("input", { type: "password", placeholder: "Jeton admin", autofocus: true });
+  const user = h("input", { placeholder: "Identifiant (vide = jeton admin)", autofocus: true });
+  const pass = h("input", { type: "password", placeholder: "Mot de passe ou jeton admin" });
   const err = h("div", { class: "err" }, message);
   const go = async () => {
-    const r = await fetch("/api/playlists", { headers: { Authorization: "Bearer " + input.value } });
-    if (!r.ok) { err.textContent = "Jeton invalide"; return; }
-    state.token = input.value;
-    sessionStorage.setItem("signage_admin", state.token);  // lu aussi par le lecteur de prévisualisation
+    const body = user.value.trim()
+      ? { username: user.value.trim(), password: pass.value }  // compte nommé
+      : { token: pass.value };                                  // jeton admin historique
+    const r = await fetch("/api/auth/login", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    if (!r.ok) { err.textContent = "Identifiants invalides"; return; }
+    state.token = (await r.json()).token;  // jeton de session (ou le jeton admin en mode historique)
+    sessionStorage.setItem("ttscreen_admin", state.token);  // lu aussi par le lecteur de prévisualisation
     boot();
   };
-  input.addEventListener("keydown", (e) => { if (e.key === "Enter") go(); });
+  for (const input of [user, pass]) input.addEventListener("keydown", (e) => { if (e.key === "Enter") go(); });
   app.replaceChildren(h("div", { class: "login" },
     h("h1", {}, "TTscreen"),
-    h("div", { class: "muted" }, "Jeton admin (variable SIGNAGE_ADMIN_TOKEN du serveur)"),
-    input, h("button", { class: "primary", onclick: go }, "Se connecter"), err));
+    h("div", { class: "muted" }, "Compte utilisateur, ou jeton admin (TTSCREEN_ADMIN_TOKEN) si aucun compte n'existe"),
+    user, pass, h("button", { class: "primary", onclick: go }, "Se connecter"), err));
 }
 
 // ---------- coque ----------
 const boot = act(async () => {
   await Promise.all([loadPlaylists(), loadMedia(), loadScreens()]);
   await loadVersions();
+  state.me = await api("/api/auth/me");  // rôle de l'utilisateur connecté (admin voit l'onglet Comptes)
+  // Onglet "Comptes" réservé au rôle admin : la gestion des utilisateurs et le journal
+  // des opérations sensibles sont des routes /api protégées par require_admin côté serveur
   const tabs = [["playlists", "Playlists"], ["media", "Médias"], ["screens", "Écrans"]];
+  if (state.me.role === "admin") tabs.push(["accounts", "Comptes"]);
   app.replaceChildren(
     h("header", {}, h("strong", {}, "TTscreen"),
       h("nav", {}, tabs.map(([k, label]) => h("button", { "data-view": k, onclick: () => setView(k) }, label))),
-      h("span", { class: "spacer" }), h("button", { class: "ghost", onclick: logout }, "Déconnexion")),
+      h("span", { class: "spacer" }),
+      h("span", { class: "muted small" }, `${state.me.username} (${state.me.role})`),
+      h("button", { class: "ghost", onclick: logout }, "Déconnexion")),
     h("main", { id: "main" }));
   render();
 });
@@ -124,6 +142,7 @@ const setView = act(async (v) => {
   state.dirty = false;
   if (v === "screens") await Promise.all([loadScreens(), loadVersions()]);
   if (v === "media") await loadMedia();
+  if (v === "accounts") await Promise.all([loadUsers(), loadAudit()]);  // onglet Comptes : utilisateurs + journal
   state.view = v;
   render();
 });
@@ -132,7 +151,7 @@ function render() {
   document.querySelectorAll("nav button").forEach((b) => b.classList.toggle("active", b.dataset.view === state.view));
   const main = $("#main");
   main.replaceChildren();
-  ({ playlists: renderPlaylists, media: renderMedia, screens: renderScreens })[state.view](main);
+  ({ playlists: renderPlaylists, media: renderMedia, screens: renderScreens, accounts: renderAccounts })[state.view](main);
 }
 
 // ---------- médias ----------
@@ -386,6 +405,77 @@ setInterval(act(async () => {
   await loadScreens();
   for (const s of state.screens) { const el = document.querySelector(`[data-status="${s.id}"]`); if (el) setStatus(el, s); }
 }), 10000);
+
+// ---------- comptes et journal (onglet réservé au rôle admin) ----------
+const loadUsers = async () => { state.users = await api("/api/users"); };
+const loadAudit = async () => { state.audit = await api("/api/audit?limit=200"); };  // 200 dernières opérations
+
+function renderAccounts(root) {
+  // Formulaire de création de compte : le mot de passe transite sur la connexion HTTPS
+  // mais n'est jamais stocké en clair côté serveur (haché PBKDF2, voir backend/app/auth.py)
+  const uName = h("input", { placeholder: "Identifiant", maxlength: 50 });
+  const uPass = h("input", { type: "password", placeholder: "Mot de passe (8 caractères min.)", maxlength: 255 });
+  const uRole = h("select", {}, ["viewer", "editor", "admin"].map((r) => h("option", { value: r }, r)));
+  const createUser = act(async () => {
+    if (!uName.value.trim() || uPass.value.length < 8) { toast("Identifiant requis, mot de passe de 8 caractères minimum", true); return; }
+    await api("/api/users", { method: "POST", body: { username: uName.value.trim(), password: uPass.value, role: uRole.value } });
+    uName.value = ""; uPass.value = "";
+    await loadUsers(); render(); toast("Compte créé");
+  });
+
+  const usersPanel = h("div", { class: "panel" },
+    h("h2", {}, "Comptes utilisateurs"),
+    h("div", { class: "row" }, uName, uPass, uRole, h("button", { class: "primary", onclick: createUser }, "Créer le compte")),
+    h("p", { class: "muted small" }, "viewer = lecture seule · editor = contenu, publication, écrans · admin = tout, y compris cette page"),
+    state.users.length ? state.users.map((u) => h("div", { class: "vers" },
+      h("strong", {}, u.username),
+      h("span", { class: "badge " + (u.role === "admin" ? "warn" : "ok") }, u.role),
+      !u.active ? h("span", { class: "badge off" }, "désactivé") : null,
+      h("span", { class: "muted small" }, "Dernière connexion : " + fmtDate(u.last_login)),
+      h("span", { class: "spacer" }),
+      // Désactiver/activer révoque immédiatement les sessions du compte (reconnexion obligatoire)
+      u.active
+        ? h("button", { class: "small danger", onclick: act(async () => {
+            if (!confirm(`Désactiver « ${u.username} » ? Ses sessions sont révoquées.`)) return;
+            await api(`/api/users/${u.id}`, { method: "PATCH", body: { active: false } });
+            await loadUsers(); render();
+          }) }, "Désactiver")
+        : h("button", { class: "small", onclick: act(async () => {
+            await api(`/api/users/${u.id}`, { method: "PATCH", body: { active: true } });
+            await loadUsers(); render();
+          }) }, "Activer"),
+      h("button", { class: "small", onclick: () => {
+        const p = h("input", { type: "password", placeholder: "Nouveau mot de passe (8 min.)" });
+        const close = openModal(`Mot de passe de « ${u.username} »`, p,
+          h("button", { class: "primary", onclick: act(async () => {
+            if (p.value.length < 8) { toast("8 caractères minimum", true); return; }
+            await api(`/api/users/${u.id}`, { method: "PATCH", body: { password: p.value } });
+            close(); toast("Mot de passe changé (sessions révoquées)");
+          }) }, "Valider"));
+      } }, "Mot de passe"),
+      h("button", { class: "small danger", onclick: act(async () => {
+        if (!confirm(`Supprimer définitivement « ${u.username} » ?`)) return;
+        await api(`/api/users/${u.id}`, { method: "DELETE" });
+        await loadUsers(); render();
+      }) }, "Supprimer")
+    )) : h("p", { class: "muted" }, "Aucun compte nommé. Le jeton admin historique (TTSCREEN_ADMIN_TOKEN) reste utilisable."));
+
+  // Journal des opérations sensibles (table audit_log côté serveur) : qui a fait quoi, quand, depuis quelle IP
+  const auditPanel = h("div", { class: "panel" },
+    h("div", { class: "row" }, h("h2", { style: "margin:0" }, "Journal des opérations sensibles"),
+      h("span", { class: "spacer" }),
+      h("button", { class: "small", onclick: act(async () => { await loadAudit(); render(); }) }, "Rafraîchir")),
+    state.audit.length ? state.audit.map((a) => h("div", { class: "vers" },
+      h("span", { class: "muted small" }, fmtDate(a.created_at)),
+      h("strong", {}, a.username),
+      h("span", { class: "badge ok" }, a.action),
+      a.target ? h("span", { class: "muted small" }, a.target) : null,
+      a.detail ? h("span", { class: "muted small" }, a.detail) : null,
+      a.ip ? h("span", { class: "muted small" }, a.ip) : null
+    )) : h("p", { class: "muted" }, "Aucune opération journalisée pour l'instant."));
+
+  root.append(h("h2", {}, "Comptes"), usersPanel, auditPanel);
+}
 
 if (state.token) boot(); else renderLogin();
 })();

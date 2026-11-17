@@ -9,6 +9,13 @@ MP4 = b"\x00\x00\x00\x18ftypmp42" + b"\x00" * 64
 ADMIN = {"Authorization": "Bearer test-admin"}
 
 
+@pytest.fixture(autouse=True)
+def _fast_hash(monkeypatch):
+    # Itérations PBKDF2 réduites en test pour rester rapide : le hachage réel fait
+    # 600 000 itérations (voir app/auth.py) et verify_password lit le nombre stocké dans le haché.
+    monkeypatch.setattr("app.auth.PBKDF2_ITERATIONS", 1000)
+
+
 @pytest.fixture
 def client(tmp_path):
     s = Settings(database_url=f"sqlite:///{tmp_path}/t.db", media_dir=tmp_path / "media",
@@ -20,3 +27,17 @@ def client(tmp_path):
 
 def upload(client, name, data, mime="application/octet-stream"):
     return client.post("/api/media", files={"file": (name, data, mime)})
+
+
+def make_user(client, username, password="motdepasse8", role="viewer"):
+    """Crée un compte via l'API d'administration (le fixture client est déjà admin)."""
+    return client.post("/api/users", json={"username": username, "password": password, "role": role})
+
+
+def login(client, username, password):
+    """Connexion par compte nommé ; renvoie la réponse (200 attendu si identifiants bons)."""
+    return client.post("/api/auth/login", json={"username": username, "password": password})
+
+
+def auth_headers(token):
+    return {"Authorization": f"Bearer {token}"}

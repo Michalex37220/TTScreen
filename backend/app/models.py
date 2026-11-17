@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import JSON, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .db import Base
@@ -71,3 +71,52 @@ class Screen(Base):
     version_id: Mapped[int | None] = mapped_column(ForeignKey("playlist_versions.id"), nullable=True)
     last_seen: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class User(Base):
+    """Compte utilisateur nommé (remplace progressivement le jeton admin unique).
+
+    Le mot de passe n'est jamais stocké en clair : uniquement un haché PBKDF2 (voir auth.py).
+    role : viewer (lecture seule) < editor (contenu) < admin (comptes + journal).
+    """
+
+    __tablename__ = "users"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    username: Mapped[str] = mapped_column(String(50), unique=True, index=True)
+    password_hash: Mapped[str] = mapped_column(String(255))
+    role: Mapped[str] = mapped_column(String(10), default="viewer")  # viewer | editor | admin
+    active: Mapped[bool] = mapped_column(Boolean, default=True)       # False = compte désactivé
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    last_login: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class UserSession(Base):
+    """Session de connexion d'un compte : seul le haché du jeton est stocké (comme les jetons d'écran).
+
+    La suppression de la ligne (déconnexion, désactivation du compte, changement de mot de passe)
+    révoque immédiatement le jeton.
+    """
+
+    __tablename__ = "user_sessions"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    expires_at: Mapped[datetime] = mapped_column(DateTime)
+
+
+class AuditLog(Base):
+    """Journal des opérations sensibles (qui a fait quoi, quand, depuis où).
+
+    username/role sont des instantanés : la ligne reste compréhensible même si le compte est supprimé ensuite.
+    """
+
+    __tablename__ = "audit_log"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+    username: Mapped[str] = mapped_column(String(50))
+    role: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    action: Mapped[str] = mapped_column(String(40), index=True)   # ex. playlist.publish, user.create
+    target: Mapped[str | None] = mapped_column(String(120), nullable=True)  # ex. "playlist:3"
+    detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    ip: Mapped[str | None] = mapped_column(String(45), nullable=True)       # IPv4 ou IPv6 du client

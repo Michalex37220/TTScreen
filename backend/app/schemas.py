@@ -3,13 +3,19 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+from .auth import RESERVED_USERNAMES
+
+# Les identifiants sont des INTEGER 32 bits côté base : on refuse plus grand (sinon OverflowError/DataError -> 500)
+MAX_ID = 2**31 - 1
+MAX_ITEMS = 500  # éléments par playlist
 
 
 class ItemIn(BaseModel):
     type: Literal["text", "image", "video"]
     text: str | None = Field(default=None, max_length=2000)
-    media_id: int | None = None
+    media_id: int | None = Field(default=None, ge=1, le=MAX_ID)
     duration_s: int | None = Field(default=None, ge=1, le=3600)
 
 
@@ -64,7 +70,7 @@ class ScreenCreated(ScreenOut):
 
 
 class AssignIn(BaseModel):
-    version_id: int | None
+    version_id: int | None = Field(ge=1, le=MAX_ID)
 
 
 # ---------- comptes, sessions et journal ----------
@@ -94,6 +100,13 @@ class UserIn(BaseModel):
     username: str = Field(min_length=3, max_length=50, pattern=r"^[A-Za-z0-9_.-]+$")
     password: str = Field(min_length=8, max_length=255)  # 8 caractères minimum : refuse les mots de passe triviaux
     role: Literal["viewer", "editor", "admin"] = "viewer"
+
+    @field_validator("username")
+    @classmethod
+    def _not_reserved(cls, v: str) -> str:
+        if v.lower() in RESERVED_USERNAMES:
+            raise ValueError("Nom d'utilisateur réservé")
+        return v
 
 
 class UserPatch(BaseModel):

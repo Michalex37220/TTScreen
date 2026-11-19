@@ -1,25 +1,33 @@
 # Tout les points de l'api décrit dans la documentation complete et dans le README
 from __future__ import annotations
 
+import re
 import secrets
 from datetime import timedelta
+from typing import Annotated
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
+from fastapi import APIRouter, Body, Depends, File, HTTPException, Path, Query, Request, UploadFile
 from fastapi.responses import FileResponse, RedirectResponse
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from . import publishing
 from .audit import log_action
-from .auth import Principal, create_session, drop_sessions, hash_password, verify_password
-from .deps import (get_bearer, get_db, get_principal, hash_token, require_admin,
-                   require_editor, require_viewer, require_screen)
+from .auth import (LEGACY_USERNAME, Principal, create_session, drop_sessions, dummy_hash, hash_password,
+                   legacy_allowed, safe_equal, verify_password)
+from .deps import (get_bearer, get_db, get_principal, hash_token, reject_if_blocked,
+                   require_admin, require_editor, require_viewer, require_screen)
 from .models import (AuditLog, Media, Playlist, PlaylistItem, PlaylistVersion, Screen, User,
                      UserSession, utcnow)
-from .schemas import (AssignIn, AuditOut, ItemIn, LoginIn, MediaOut, MeOut, PlaylistIn, PlaylistOut,
+from .schemas import (MAX_ID, MAX_ITEMS, AssignIn, AuditOut, ItemIn, LoginIn, MediaOut, MeOut, PlaylistIn, PlaylistOut,
                       ScreenCreated, ScreenIn, ScreenOut, SessionOut, UserIn, UserOut, UserPatch,
                       VersionOut)
 from .storage import save_upload
+
+# Identifiant de ressource borné (INTEGER 32 bits) : refuse tôt les valeurs hors plage (sinon 500 côté base)
+IntId = Annotated[int, Path(ge=1, le=MAX_ID)]
+# Nom stocké par l'application : SHA-256 hexadécimal + extension autorisée, rien d'autre
+STORED_NAME_RE = re.compile(r"^[0-9a-f]{64}\.(png|jpg|webp|gif|mp4|webm)$")
 
 ONLINE_WINDOW = timedelta(seconds=60)
 DEFAULT_DURATION = 10
@@ -69,7 +77,7 @@ def health():
 
 @public.get("/files/{stored_name}")
 def get_file(stored_name: str, request: Request):
-    if "/" in stored_name or ".." in stored_name:
+    if not STORED_NAME_RE.fullmatch(stored_name):
         raise HTTPException(404)
     path = request.app.state.settings.media_dir / stored_name
     if not path.is_file():
@@ -87,16 +95,25 @@ def login(body: LoginIn, request: Request, db: Session = Depends(get_db)):
     """
     s = request.app.state.settings
     if body.token is not None and not body.username:
-        if secrets.compare_digest(body.token, s.admin_token):
-            log_action(db, request, Principal("admin", "admin", legacy=True), "connexion", target="jeton admin")
+        # Comparaison sur octets (pas de 500 sur un jeton non ASCII) ; refusé si désactivé ou si un
+        # compte admin nommé existe déjà (voir auth.legacy_allowed)
+        if s.admin_token and safe_equal(body.token, s.admin_token) and legacy_allowed(db, s.legacy_token_always):
+            log_action(db, request, Principal(LEGACY_USERNAME, "admin", legacy=True), "connexion", target="jeton admin")
             db.commit()
-            return SessionOut(token=body.token, username="admin", role="admin", expires_at=None)
+            return SessionOut(token=body.token, username=LEGACY_USERNAME, role="admin", expires_at=None)
         log_action(db, request, None, "connexion_echouee", target="jeton admin")
         db.commit()
         raise HTTPException(401, "Identifiants invalides")
-    # Compte nommé : même message d'erreur dans tous les cas pour ne pas révéler quel identifiant existe
-    user = db.scalar(select(User).where(User.username == (body.username or "")))
-    if user is None or not user.active or not verify_password(body.password or "", user.password_hash):
+    # Compte nommé : même message d'erreur ET même durée dans tous les cas pour ne pas révéler quel
+    # identifiant existe (PBKDF2 est toujours exécuté, contre un haché factice si le compte n'existe pas)
+    uname = (body.username or "")
+    user_key = f"loginuser:{uname.lower()}"
+    reject_if_blocked(request, user_key, s.rate_limit_login_user)  # anti force brute par identifiant
+    user = db.scalar(select(User).where(User.username == uname))
+    stored = user.password_hash if user is not None else dummy_hash()
+    password_ok = verify_password(body.password or "", stored)
+    if user is None or not user.active or not password_ok:
+        request.app.state.limiter.check(user_key, s.rate_limit_login_user)
         log_action(db, request, None, "connexion_echouee", target=body.username)
         db.commit()
         raise HTTPException(401, "Identifiants invalides")
@@ -149,7 +166,7 @@ def list_media(db: Session = Depends(get_db)):
 
 
 @editor.delete("/media/{media_id}", status_code=204)
-def delete_media(media_id: int, request: Request, principal: Principal = Depends(get_principal),
+def delete_media(media_id: IntId, request: Request, principal: Principal = Depends(get_principal),
                  db: Session = Depends(get_db)):
     m = db.get(Media, media_id)
     if m is None:
@@ -183,12 +200,12 @@ def list_playlists(db: Session = Depends(get_db)):
 
 
 @viewer.get("/playlists/{pid}", response_model=PlaylistOut)
-def get_playlist(pid: int, db: Session = Depends(get_db)):
+def get_playlist(pid: IntId, db: Session = Depends(get_db)):
     return _playlist(db, pid)
 
 
 @editor.put("/playlists/{pid}", response_model=PlaylistOut)
-def rename_playlist(pid: int, body: PlaylistIn, request: Request,
+def rename_playlist(pid: IntId, body: PlaylistIn, request: Request,
                     principal: Principal = Depends(get_principal), db: Session = Depends(get_db)):
     p = _playlist(db, pid)
     p.name = body.name
@@ -198,7 +215,7 @@ def rename_playlist(pid: int, body: PlaylistIn, request: Request,
 
 
 @editor.delete("/playlists/{pid}", status_code=204)
-def delete_playlist(pid: int, request: Request, principal: Principal = Depends(get_principal),
+def delete_playlist(pid: IntId, request: Request, principal: Principal = Depends(get_principal),
                     db: Session = Depends(get_db)):
     p = _playlist(db, pid)
     vids = [v.id for v in p.versions]
@@ -210,7 +227,7 @@ def delete_playlist(pid: int, request: Request, principal: Principal = Depends(g
 
 
 @editor.put("/playlists/{pid}/items", response_model=PlaylistOut)
-def set_items(pid: int, items: list[ItemIn], request: Request, principal: Principal = Depends(get_principal),
+def set_items(pid: IntId, items: Annotated[list[ItemIn], Body(max_length=MAX_ITEMS)], request: Request, principal: Principal = Depends(get_principal),
               db: Session = Depends(get_db)):
     """Remplace la liste ordonnée complète des éléments (l'ordre du tableau = l'ordre de lecture)."""
     p = _playlist(db, pid)
@@ -239,7 +256,7 @@ def set_items(pid: int, items: list[ItemIn], request: Request, principal: Princi
 
 # ---------- publication ----------
 @editor.post("/playlists/{pid}/publish", response_model=VersionOut, status_code=201)
-def publish_playlist(pid: int, request: Request, principal: Principal = Depends(get_principal),
+def publish_playlist(pid: IntId, request: Request, principal: Principal = Depends(get_principal),
                      db: Session = Depends(get_db)):
     p = _playlist(db, pid)
     try:
@@ -253,19 +270,19 @@ def publish_playlist(pid: int, request: Request, principal: Principal = Depends(
 
 
 @viewer.get("/playlists/{pid}/preview")
-def preview_draft(pid: int, db: Session = Depends(get_db)):
+def preview_draft(pid: IntId, db: Session = Depends(get_db)):
     """Brouillon courant au format lecteur, sans rien publier."""
     manifest, _ = publishing.build_manifest(_playlist(db, pid))
     return {"version_id": None, "number": None, **manifest}
 
 
 @viewer.get("/playlists/{pid}/versions", response_model=list[VersionOut])
-def list_versions(pid: int, db: Session = Depends(get_db)):
+def list_versions(pid: IntId, db: Session = Depends(get_db)):
     return _playlist(db, pid).versions
 
 
 @viewer.get("/versions/{vid}")
-def get_version(vid: int, db: Session = Depends(get_db)):
+def get_version(vid: IntId, db: Session = Depends(get_db)):
     """Contenu exact d'une version (prévisualisation / test avant déploiement)."""
     v = db.get(PlaylistVersion, vid)
     if v is None:
@@ -291,7 +308,7 @@ def list_screens(db: Session = Depends(get_db)):
 
 
 @editor.post("/screens/{sid}/assign", response_model=ScreenOut)
-def assign_version(sid: int, body: AssignIn, request: Request,
+def assign_version(sid: IntId, body: AssignIn, request: Request,
                    principal: Principal = Depends(get_principal), db: Session = Depends(get_db)):
     """Affecte une version à un écran. Revenir en arrière = affecter une version antérieure."""
     s = db.get(Screen, sid)
@@ -307,7 +324,7 @@ def assign_version(sid: int, body: AssignIn, request: Request,
 
 
 @viewer.get("/screens/{sid}/manifest")
-def screen_preview(sid: int, db: Session = Depends(get_db)):
+def screen_preview(sid: IntId, db: Session = Depends(get_db)):
     """Ce que voit l'écran (version affectée), sans le marquer comme connecté."""
     s = db.get(Screen, sid)
     if s is None:
@@ -318,7 +335,7 @@ def screen_preview(sid: int, db: Session = Depends(get_db)):
 
 
 @editor.post("/screens/{sid}/rotate-token", response_model=ScreenCreated)
-def rotate_token(sid: int, request: Request, principal: Principal = Depends(get_principal),
+def rotate_token(sid: IntId, request: Request, principal: Principal = Depends(get_principal),
                  db: Session = Depends(get_db)):
     """Génère un nouveau jeton d'écran : l'ancien cesse de fonctionner immédiatement."""
     s = db.get(Screen, sid)
@@ -332,7 +349,7 @@ def rotate_token(sid: int, request: Request, principal: Principal = Depends(get_
 
 
 @editor.post("/screens/{sid}/revoke-token", response_model=ScreenOut)
-def revoke_token(sid: int, request: Request, principal: Principal = Depends(get_principal),
+def revoke_token(sid: IntId, request: Request, principal: Principal = Depends(get_principal),
                  db: Session = Depends(get_db)):
     s = db.get(Screen, sid)
     if s is None:
@@ -363,7 +380,7 @@ def list_users(db: Session = Depends(get_db)):
 
 
 @admin.patch("/users/{uid}", response_model=UserOut)
-def update_user(uid: int, body: UserPatch, request: Request,
+def update_user(uid: IntId, body: UserPatch, request: Request,
                 principal: Principal = Depends(get_principal), db: Session = Depends(get_db)):
     """Modifie un compte (rôle, état actif, mot de passe).
 
@@ -397,7 +414,7 @@ def update_user(uid: int, body: UserPatch, request: Request,
 
 
 @admin.delete("/users/{uid}", status_code=204)
-def delete_user(uid: int, request: Request, principal: Principal = Depends(get_principal),
+def delete_user(uid: IntId, request: Request, principal: Principal = Depends(get_principal),
                 db: Session = Depends(get_db)):
     """Supprime un compte (et révoque ses sessions). Interdit de se supprimer soi-même
     ou de supprimer le dernier administrateur actif."""

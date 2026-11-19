@@ -4,7 +4,7 @@ services:
   api:
     build: { context: .., dockerfile: deploy/Dockerfile }
     environment:
-      TTSCREEN_ADMIN_TOKEN: ${TTSCREEN_ADMIN_TOKEN:-dev-admin-token}
+      TTSCREEN_ADMIN_TOKEN: ${TTSCREEN_ADMIN_TOKEN:?définir TTSCREEN_ADMIN_TOKEN (24 car. min., voir deploy/.env.example)}
     volumes:
       - data:/data
     ports:

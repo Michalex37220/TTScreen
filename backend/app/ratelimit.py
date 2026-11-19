@@ -27,6 +27,23 @@ class RateLimiter:
         self.window_s = window_s
         self._hits: dict[str, deque[float]] = {}  # clé -> horodatages des requêtes récentes
         self._lock = threading.Lock()
+        self._last_gc = float("-inf")  # dernier nettoyage complet (au plus un par fenêtre : évite un O(n) à chaque requête)
+
+    def blocked(self, key: str, limit: int) -> int:
+        """Comme `check` mais SANS enregistrer de requête : renvoie les secondes d'attente si `key`
+        a déjà atteint `limit` dans la fenêtre, sinon 0. Sert à bloquer après N échecs enregistrés."""
+        if limit <= 0:
+            return 0
+        now = time.monotonic()
+        with self._lock:
+            dq = self._hits.get(key)
+            if not dq:
+                return 0
+            while dq and now - dq[0] >= self.window_s:
+                dq.popleft()
+            if len(dq) >= limit:
+                return max(1, int(self.window_s - (now - dq[0])) + 1)
+            return 0
 
     def check(self, key: str, limit: int) -> int:
         """Enregistre une requête pour `key` et renvoie 0 si elle est autorisée,
@@ -41,9 +58,11 @@ class RateLimiter:
             if len(dq) >= limit:
                 return max(1, int(self.window_s - (now - dq[0])) + 1)
             dq.append(now)
-            # Nettoyage périodique des clés mortes pour ne pas faire grossir le dictionnaire indéfiniment
-            if len(self._hits) > 10000:
+            # Nettoyage des clés mortes, au plus une fois par fenêtre (les clés expirent après `window_s`),
+            # pour ne pas reconstruire tout le dictionnaire à chaque requête sous le verrou.
+            if len(self._hits) > 10000 and now - self._last_gc >= self.window_s:
                 self._hits = {k: v for k, v in self._hits.items() if v and now - v[-1] < self.window_s}
+                self._last_gc = now
             return 0
 
 
@@ -52,8 +71,9 @@ def make_rate_limit_middleware(limiter: RateLimiter):
 
     - `/api/health` n'est jamais limité (sonde de supervision) ;
     - `POST /api/auth/login` : limite stricte **par IP** (anti force brute sur les mots de passe) ;
-    - `/api/player/manifest` : limite **par jeton d'écran** et non par IP, car plusieurs écrans
-      derrière la même box/NAT partagent une IP mais ont des jetons distincts ;
+    - `/api/player/manifest` : limite **par jeton d'écran** (plusieurs écrans derrière la même NAT
+      ont des jetons distincts) ET limite générale par IP, pour qu'un client qui varie le jeton à
+      chaque requête ne contourne pas le quota ni ne fasse gonfler le dictionnaire ;
     - le reste de `/api` : limite générale par IP.
     """
 
@@ -68,10 +88,18 @@ def make_rate_limit_middleware(limiter: RateLimiter):
         elif path == "/api/player/manifest":
             auth = request.headers.get("authorization", "")
             token = auth[7:].strip() if auth.lower().startswith("bearer ") else ""
+            # D'abord le quota par IP (borne le nombre de clés créables), puis celui par jeton
+            retry = limiter.check(f"ip:{ip}", settings.rate_limit_api)
             key, limit = f"screen:{hash_token(token)}", settings.rate_limit_player
+            if not retry:
+                retry = limiter.check(key, limit)
+            return await _respond(request, call_next, retry)
         else:
             key, limit = f"ip:{ip}", settings.rate_limit_api
         retry = limiter.check(key, limit)
+        return await _respond(request, call_next, retry)
+
+    async def _respond(request, call_next, retry):
         if retry:
             return JSONResponse({"detail": "Trop de requêtes, réessayez plus tard."},
                                 status_code=429, headers={"Retry-After": str(retry)})

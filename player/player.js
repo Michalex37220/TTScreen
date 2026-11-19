@@ -10,9 +10,11 @@
   const POLL_MS = 10000;
 
   let source;
-  const adminUrl = params.get("screen") ? `/api/screens/${params.get("screen")}/manifest`
-    : params.get("version") ? `/api/versions/${params.get("version")}`
-    : params.get("playlist") ? `/api/playlists/${params.get("playlist")}/preview` : null;
+  // Les identifiants du fragment sont encodés : "#screen=../x" ne peut pas dévier la requête authentifiée
+  const enc = (k) => encodeURIComponent(params.get(k));
+  const adminUrl = params.get("screen") ? `/api/screens/${enc("screen")}/manifest`
+    : params.get("version") ? `/api/versions/${enc("version")}`
+    : params.get("playlist") ? `/api/playlists/${enc("playlist")}/preview` : null;
   if (params.get("token")) {
     source = { url: "/api/player/manifest", headers: { Authorization: "Bearer " + params.get("token") }, preview: false };
   } else if (adminUrl) {

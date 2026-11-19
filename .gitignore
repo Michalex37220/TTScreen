@@ -1,0 +1,18 @@
+# Secrets et configuration locale
+.env
+deploy/.env
+!.env.example
+!deploy/.env.example
+
+# Données d'exécution (base SQLite = hachés de mots de passe, journal d'audit avec IP ; médias)
+backend/data/
+data/
+backups/
+*.db
+*.sqlite3
+
+# Python / outils
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/

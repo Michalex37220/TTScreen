@@ -1,9 +1,9 @@
-# N'a plus besoin de dépendences supplémentaires par rapport aux anciennes versions
-fastapi>=0.115,<1
-uvicorn[standard]>=0.30,<1
-sqlalchemy>=2.0,<3
-pydantic>=2.7,<3
-python-multipart>=0.0.9
-psycopg[binary]>=3.2,<4
-pytest
-httpx
+# Dépendances d'exécution (image de production) : versions épinglées, celles validées par la suite de tests.
+# Pour mettre à jour : pip install -U ... puis geler ici ; idéalement générer aussi des hachés (pip-compile --generate-hashes).
+fastapi==0.163.1
+starlette==1.10.0
+uvicorn[standard]==0.54.0
+sqlalchemy==2.1.9
+pydantic==2.14.3
+python-multipart==0.0.34
+psycopg[binary]==3.3.9

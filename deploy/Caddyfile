@@ -9,18 +9,39 @@
 		-Server
 	}
 
-	request_body {
-		max_size 210MB
+	# Médias servis directement par Caddy (noms = SHA-256, donc cache immuable).
+	# Seuls les noms produits par l'application sont servis : ni dossier caché (.tmp = envois en cours),
+	# ni autre fichier du volume.
+	handle_path /files/* {
+		@stored path_regexp ^/[0-9a-f]{64}\.(png|jpg|webp|gif|mp4|webm)$
+		handle @stored {
+			root * /srv/media
+			header Cache-Control "public, max-age=31536000, immutable"
+			header Content-Security-Policy "default-src 'none'"
+			file_server
+		}
+		handle {
+			respond 404
+		}
 	}
 
-	# Médias servis directement par Caddy (noms = SHA-256, donc cache immuable)
-	handle_path /files/* {
-		root * /srv/media
-		header Cache-Control "public, max-age=31536000, immutable"
-		file_server
+	# Gros corps (200 Mo) uniquement pour l'envoi de médias ; 1 Mo partout ailleurs, pour qu'un
+	# client non authentifié ne puisse pas faire lire de gros corps sur les autres routes.
+	@upload {
+		method POST
+		path /api/media
+	}
+	handle @upload {
+		request_body {
+			max_size 210MB
+		}
+		reverse_proxy api:8000
 	}
 
 	handle {
+		request_body {
+			max_size 1MB
+		}
 		reverse_proxy api:8000
 	}
 }

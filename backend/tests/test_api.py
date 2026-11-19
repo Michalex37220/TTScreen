@@ -1,4 +1,4 @@
-from conftest import ADMIN, MP4, PNG, auth_headers, login, make_user, upload
+from conftest import ADMIN, MP4, PNG, TEST_TOKEN, auth_headers, login, make_user, upload
 
 
 def mk_playlist(client):
@@ -132,7 +132,9 @@ def test_production_refuses_weak_admin_token(tmp_path):
         create_app(Settings(admin_token="dev-admin-token", **base))
     with pytest.raises(RuntimeError):
         create_app(Settings(admin_token="court", **base))
-    create_app(Settings(admin_token="x" * 32, **base))  # accepté
+    with pytest.raises(RuntimeError):
+        create_app(Settings(admin_token="x" * 32, **base))  # assez long mais sans variété
+    create_app(Settings(admin_token="Zq8vN3xK1mP7wR5tY2uL9aB4", **base))  # accepté
 
 
 # ---------- comptes, rôles et sessions ----------
@@ -161,7 +163,7 @@ def test_login_logout_and_me(client):
     assert client.post("/api/auth/logout", headers=auth_headers(tok)).status_code == 204
     assert client.get("/api/auth/me", headers=auth_headers(tok)).status_code == 401
     # le jeton admin historique reste accepté en login (mode token), avec le rôle admin et sans expiration
-    r = client.post("/api/auth/login", json={"token": "test-admin"})
+    r = client.post("/api/auth/login", json={"token": TEST_TOKEN})
     assert r.status_code == 200 and r.json()["role"] == "admin" and r.json()["expires_at"] is None
     me = client.get("/api/auth/me", headers=auth_headers(r.json()["token"]))
     assert me.json()["legacy"] is True
@@ -250,7 +252,7 @@ def test_rate_limit(tmp_path):
     from app.main import create_app
     # Limites très basses pour le test : 5 requêtes / minute sur /api (hors health) et 2 logins / minute
     s = Settings(database_url=f"sqlite:///{tmp_path}/r.db", media_dir=tmp_path / "m",
-                 admin_token="test-admin", rate_limit_api=5, rate_limit_login=2, rate_window_s=60)
+                 admin_token=TEST_TOKEN, legacy_token_always=True, rate_limit_api=5, rate_limit_login=2, rate_window_s=60)
     with TestClient(create_app(s)) as c:
         c.headers.update(ADMIN)
         codes = [c.get("/api/playlists").status_code for _ in range(7)]
@@ -272,7 +274,7 @@ def test_rate_limit_player_per_token(tmp_path):
     # La limite du manifeste est comptée par jeton d'écran, pas par IP :
     # deux écrans derrière la même IP ont chacun leur propre quota
     s = Settings(database_url=f"sqlite:///{tmp_path}/r.db", media_dir=tmp_path / "m",
-                 admin_token="test-admin", rate_limit_api=1000, rate_limit_player=3, rate_window_s=60)
+                 admin_token=TEST_TOKEN, legacy_token_always=True, rate_limit_api=1000, rate_limit_player=3, rate_window_s=60)
     with TestClient(create_app(s)) as c:
         c.headers.update(ADMIN)
         t1 = c.post("/api/screens", json={"name": "A"}).json()["token"]

@@ -32,7 +32,7 @@ def publish(db: Session, playlist: Playlist) -> PlaylistVersion:
         playlist_id=playlist.id, number=(last or 0) + 1, manifest=manifest, media_ids=media_ids
     )
     db.add(version)
-    db.commit()
+    db.flush()  # attribue l'id ; le commit est fait par l'appelant, dans la même transaction que l'audit
     return version
 
 

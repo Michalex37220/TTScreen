@@ -23,12 +23,14 @@ def log_action(db: Session, request: Request, principal: Principal | None, actio
     - `target` : ressource visée, ex. "playlist:3" ;
     - `ip` : adresse du client (request.client.host), pour situer l'action.
     """
+    # Troncature aux longueurs des colonnes : sous PostgreSQL un VARCHAR dépassé lève une erreur
+    # (SQLite l'ignore), ce qui faisait échouer l'opération auditée pour un nom de fichier long.
     db.add(AuditLog(
         created_at=utcnow(),
-        username=principal.username if principal else "anonyme",
+        username=(principal.username if principal else "anonyme")[:50],
         role=principal.role if principal else None,
-        action=action,
-        target=target,
+        action=action[:40],
+        target=target[:120] if target else None,
         detail=detail,
-        ip=request.client.host if request.client else None,
+        ip=(request.client.host if request.client else None) and request.client.host[:45],
     ))

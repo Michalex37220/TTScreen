@@ -5,12 +5,18 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
+def _flag(name: str) -> bool:
+    return os.getenv(name, "").strip().lower() in ("1", "true", "yes", "on")
+
+
 @dataclass(frozen=True)
 class Settings:
     # Base de donné (modifiable mais a vos risques)
     database_url: str = "sqlite:///./data/ttscreen.db"
     media_dir: Path = Path("./data/media")
-    admin_token: str = "dev-admin-token"
+    # Jeton admin historique. Vide = désactivé (plus aucune valeur par défaut connue).
+    # Si renseigné : 24 caractères minimum, pas de valeur triviale, dans TOUS les environnements.
+    admin_token: str = ""
     max_upload_mb: int = 200
     env: str = "development"
     # Limitation de débit (fenêtre glissante en mémoire, voir app/ratelimit.py) ; 0 = désactivé
@@ -18,7 +24,14 @@ class Settings:
     rate_limit_api: int = 600     # requêtes / fenêtre / IP sur le reste de /api
     rate_limit_player: int = 120  # requêtes / fenêtre / jeton d'écran sur /api/player/manifest
     rate_limit_login: int = 20    # tentatives de connexion / fenêtre / IP (anti force brute)
+    rate_limit_authfail: int = 20  # jetons Bearer invalides / fenêtre / IP avant blocage (429)
+    rate_limit_login_user: int = 10  # échecs de connexion / fenêtre / identifiant avant blocage (429)
     session_ttl_h: int = 12       # durée de validité d'une session utilisateur, en heures
+    # Par défaut le jeton historique est refusé dès qu'un compte admin nommé actif existe.
+    legacy_token_always: bool = False
+    # Par défaut le compte d'amorçage n'est créé que s'il n'existe aucun admin ; True = réinitialise
+    # explicitement mot de passe/rôle/état de ce compte (récupération d'accès).
+    bootstrap_admin_reset: bool = False
     # Compte admin d'amorçage facultatif (créé au démarrage si les deux variables sont renseignées)
     bootstrap_admin_user: str = ""
     bootstrap_admin_password: str = ""
@@ -35,7 +48,11 @@ class Settings:
             rate_limit_api=int(os.getenv("TTSCREEN_RATE_LIMIT_API", cls.rate_limit_api)),
             rate_limit_player=int(os.getenv("TTSCREEN_RATE_LIMIT_PLAYER", cls.rate_limit_player)),
             rate_limit_login=int(os.getenv("TTSCREEN_RATE_LIMIT_LOGIN", cls.rate_limit_login)),
+            rate_limit_authfail=int(os.getenv("TTSCREEN_RATE_LIMIT_AUTHFAIL", cls.rate_limit_authfail)),
+            rate_limit_login_user=int(os.getenv("TTSCREEN_RATE_LIMIT_LOGIN_USER", cls.rate_limit_login_user)),
             session_ttl_h=int(os.getenv("TTSCREEN_SESSION_TTL_H", cls.session_ttl_h)),
+            legacy_token_always=_flag("TTSCREEN_LEGACY_TOKEN_ALWAYS"),
+            bootstrap_admin_reset=_flag("TTSCREEN_BOOTSTRAP_ADMIN_RESET"),
             bootstrap_admin_user=os.getenv("TTSCREEN_BOOTSTRAP_ADMIN_USER", cls.bootstrap_admin_user),
             bootstrap_admin_password=os.getenv("TTSCREEN_BOOTSTRAP_ADMIN_PASSWORD", cls.bootstrap_admin_password),
         )

@@ -6,7 +6,8 @@ from app.main import create_app
 
 PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 64
 MP4 = b"\x00\x00\x00\x18ftypmp42" + b"\x00" * 64
-ADMIN = {"Authorization": "Bearer test-admin"}
+TEST_TOKEN = "test-admin-token-0123456789abcdef"  # >= 24 caractères variés (exigé dans tous les environnements)
+ADMIN = {"Authorization": f"Bearer {TEST_TOKEN}"}
 
 
 @pytest.fixture(autouse=True)
@@ -19,7 +20,8 @@ def _fast_hash(monkeypatch):
 @pytest.fixture
 def client(tmp_path):
     s = Settings(database_url=f"sqlite:///{tmp_path}/t.db", media_dir=tmp_path / "media",
-                 admin_token="test-admin", max_upload_mb=1)
+                 admin_token=TEST_TOKEN, max_upload_mb=1,
+                 legacy_token_always=True)  # les tests historiques créent des comptes admin tout en gardant le jeton
     with TestClient(create_app(s)) as c:
         c.headers.update(ADMIN)
         yield c

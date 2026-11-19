@@ -17,7 +17,7 @@ import secrets
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from .models import User, UserSession, utcnow
@@ -27,9 +27,20 @@ from .models import User, UserSession, utcnow
 # et dissuasif contre les attaques par force brute.
 PBKDF2_ITERATIONS = 600_000
 
+# Nom réservé du principal « jeton admin historique » : impossible à usurper par un compte nommé
+# (les journaux distinguent ainsi sans ambiguïté un compte « admin » du jeton historique).
+LEGACY_USERNAME = "legacy-admin"
+RESERVED_USERNAMES = frozenset({LEGACY_USERNAME, "anonyme"})
+
 # Hiérarchie des rôles : chaque rôle englobe les précédents
 ROLES = ("viewer", "editor", "admin")
 ROLE_LEVEL = {r: i for i, r in enumerate(ROLES)}
+
+
+def safe_equal(a: str, b: str) -> bool:
+    """Comparaison en temps constant sur des octets : accepte n'importe quel caractère Unicode
+    (compare_digest lève TypeError sur des str non ASCII, ce qui donnait un HTTP 500)."""
+    return secrets.compare_digest(a.encode("utf-8", "surrogatepass"), b.encode("utf-8", "surrogatepass"))
 
 
 def hash_token(token: str) -> str:
@@ -42,6 +53,17 @@ def hash_password(password: str) -> str:
     salt = secrets.token_bytes(16)
     digest = hashlib.pbkdf2_hmac("sha256", password.encode(), salt, PBKDF2_ITERATIONS)
     return f"pbkdf2_sha256${PBKDF2_ITERATIONS}${salt.hex()}${digest.hex()}"
+
+
+_DUMMY_HASH: str | None = None
+
+
+def dummy_hash() -> str:
+    """Haché factice (même coût PBKDF2) pour égaliser le temps de réponse quand l'identifiant n'existe pas."""
+    global _DUMMY_HASH
+    if _DUMMY_HASH is None:
+        _DUMMY_HASH = hash_password(secrets.token_urlsafe(16))
+    return _DUMMY_HASH
 
 
 def verify_password(password: str, stored: str) -> bool:
@@ -78,14 +100,23 @@ def create_session(db: Session, user: User, ttl: timedelta) -> tuple[str, dateti
     return token, expires_at
 
 
-def resolve_token(db: Session, token: str, admin_token: str) -> Principal | None:
+def legacy_allowed(db: Session, legacy_always: bool = False) -> bool:
+    """Le jeton admin historique n'est accepté que tant qu'aucun compte admin nommé actif n'existe
+    (sauf TTSCREEN_LEGACY_TOKEN_ALWAYS) : il sert à amorcer, pas à rester une porte dérobée permanente."""
+    if legacy_always:
+        return True
+    n = db.scalar(select(func.count(User.id)).where(User.role == "admin", User.active.is_(True)))
+    return not n
+
+
+def resolve_token(db: Session, token: str, admin_token: str, legacy_always: bool = False) -> Principal | None:
     """Transforme un jeton Bearer en identité, ou None s'il est invalide.
 
-    Le jeton admin historique est comparé en temps constant et donne un principal admin.
+    Le jeton admin historique (s'il est configuré et encore autorisé) est comparé en temps constant.
     Un jeton de session n'est accepté que si le compte existe, est actif et la session non expirée.
     """
-    if secrets.compare_digest(token, admin_token):
-        return Principal(username="admin", role="admin", legacy=True)
+    if admin_token and safe_equal(token, admin_token) and legacy_allowed(db, legacy_always):
+        return Principal(username=LEGACY_USERNAME, role="admin", legacy=True)
     session = db.scalar(select(UserSession).where(UserSession.token_hash == hash_token(token)))
     if session is None:
         return None
@@ -101,18 +132,23 @@ def drop_sessions(db: Session, user_id: int) -> None:
         db.delete(s)
 
 
-def bootstrap_admin(db: Session, username: str, password: str) -> None:
-    """Crée (ou réinitialise) le compte admin d'amorçage si TTSCREEN_BOOTSTRAP_ADMIN_* sont renseignés.
+def bootstrap_admin(db: Session, username: str, password: str, reset: bool = False) -> None:
+    """Crée le compte admin d'amorçage si TTSCREEN_BOOTSTRAP_ADMIN_* sont renseignés ET qu'aucun admin n'existe.
 
-    Utile en production pour créer un premier compte nommé sans exposer le jeton historique.
-    Sans ces variables, rien n'est créé : le jeton admin historique reste la méthode d'amorçage.
+    Un compte existant n'est JAMAIS modifié au redémarrage (sinon un mot de passe changé via l'interface
+    serait écrasé et un compte désactivé volontairement serait réactivé). Pour récupérer l'accès,
+    positionner explicitement TTSCREEN_BOOTSTRAP_ADMIN_RESET=true (réinitialise mot de passe, rôle, état).
     """
     if not username or not password:
         return
+    if username.lower() in RESERVED_USERNAMES:
+        raise RuntimeError(f"Nom d'utilisateur d'amorçage réservé : {username!r}")
     user = db.scalar(select(User).where(User.username == username))
     if user is None:
-        db.add(User(username=username, password_hash=hash_password(password), role="admin"))
-    else:
+        if reset or not db.scalar(select(func.count(User.id)).where(User.role == "admin")):
+            db.add(User(username=username, password_hash=hash_password(password), role="admin"))
+    elif reset:
         user.password_hash = hash_password(password)
         user.role = "admin"
         user.active = True
+        drop_sessions(db, user.id)

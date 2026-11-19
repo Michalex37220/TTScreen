@@ -21,7 +21,19 @@ services:
     build: { context: .., dockerfile: deploy/Dockerfile }
     environment:
       TTSCREEN_ENV: production
-      TTSCREEN_ADMIN_TOKEN: ${TTSCREEN_ADMIN_TOKEN:?définir TTSCREEN_ADMIN_TOKEN dans deploy/.env}
+      # Jeton historique facultatif si un compte d'amorçage est défini (l'API refuse de démarrer sans aucun des deux)
+      TTSCREEN_ADMIN_TOKEN: ${TTSCREEN_ADMIN_TOKEN:-}
+      TTSCREEN_BOOTSTRAP_ADMIN_USER: ${TTSCREEN_BOOTSTRAP_ADMIN_USER:-}
+      TTSCREEN_BOOTSTRAP_ADMIN_PASSWORD: ${TTSCREEN_BOOTSTRAP_ADMIN_PASSWORD:-}
+      TTSCREEN_BOOTSTRAP_ADMIN_RESET: ${TTSCREEN_BOOTSTRAP_ADMIN_RESET:-}
+      TTSCREEN_LEGACY_TOKEN_ALWAYS: ${TTSCREEN_LEGACY_TOKEN_ALWAYS:-}
+      TTSCREEN_RATE_LIMIT_API: ${TTSCREEN_RATE_LIMIT_API:-600}
+      TTSCREEN_RATE_LIMIT_PLAYER: ${TTSCREEN_RATE_LIMIT_PLAYER:-120}
+      TTSCREEN_RATE_LIMIT_LOGIN: ${TTSCREEN_RATE_LIMIT_LOGIN:-20}
+      TTSCREEN_SESSION_TTL_H: ${TTSCREEN_SESSION_TTL_H:-12}
+      # Le port 8000 n'est joignable que par Caddy (expose, pas de ports:) : on peut lui faire confiance
+      # pour X-Forwarded-For, sinon tous les clients apparaissent avec l'IP de Caddy (limites partagées)
+      FORWARDED_ALLOW_IPS: "*"
       TTSCREEN_DATABASE_URL: postgresql+psycopg://ttscreen:${POSTGRES_PASSWORD}@db:5432/ttscreen
     volumes:
       - media:/data/media

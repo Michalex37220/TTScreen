@@ -51,14 +51,18 @@ TTscreen est un **MVP fonctionnel en local**. Ce qui est réalisé et ce qui res
 - **Playlists** : texte, images et vidéos ordonnés (500 éléments max par playlist), avec une durée d'affichage par élément.
 - **Prévisualisation** du brouillon et de chaque version avant diffusion.
 - **Versions immuables** : chaque publication crée une version figée (v1, v2…). Retour arrière = rediffuser une ancienne version.
-- **Écrans** : un jeton distinct par écran, révocable et renouvelable ; état connecté / déconnecté en direct.
+- **Écrans** : un jeton distinct par écran, révocable et renouvelable ; état connecté / déconnecté en direct ; renommage, suppression, changement de groupe.
+- **Groupes d'écrans** : plusieurs écrans affichent le même contenu ; une seule affectation met à jour tout le groupe.
+- **Planning horaire** : par écran ou par groupe, « tel contenu, tels jours, de HH:MM à HH:MM » (fuseau configurable) ; hors plage, retour au contenu habituel.
+- **Tableau de bord** : écrans connectés ou non, écrans sans contenu, espace médias, en un coup d'œil.
+- **Productivité** : duplication de playlist, changement de son propre mot de passe.
 - **Lecteur** : lecture en boucle, passage automatique à l'élément suivant, récupération des nouvelles versions toutes les 10 secondes, sans coupure.
 
 ## Architecture
 
 ```
 TTScreen/
-├── backend/    API FastAPI (Python), modèles SQLAlchemy, tests pytest
+├── backend/    API Rust (axum + SeaORM), tests `cargo test`
 ├── frontend/   Interface d'administration (servie sur /admin/)
 ├── player/     Lecteur d'affichage (servi sur /player/)
 ├── deploy/     Dockerfile (Alpine), Docker Compose, Caddyfile
@@ -70,13 +74,24 @@ TTScreen/
 
 | Brique | Choix |
 |---|---|
-| Backend | Python 3.11+, FastAPI, SQLAlchemy 2 (dépendances épinglées) |
+| Backend | Rust (édition 2021) : axum, tokio, SeaORM (dépendances verrouillées par `Cargo.lock`) |
 | Base de données | SQLite en développement, PostgreSQL en production |
 | Stockage | Fichiers sur disque, nommés par leur SHA-256 (`<sha256>.<ext>` uniquement) |
 | Interface et lecteur | HTML + JavaScript, servis par l'API |
 | Production | Docker Compose, Caddy (HTTPS automatique, sert les médias, borne les corps) |
 
 Principe de diffusion : l'administrateur **publie** une version, l'**affecte** à un écran, et le lecteur de cet écran interroge régulièrement `GET /api/player/manifest` avec son jeton. Quand la version change, la nouvelle playlist démarre à la fin de l'élément en cours.
+
+---
+
+## Port Rust : ce qui change
+
+Le backend a été réécrit de Python (FastAPI/SQLAlchemy) vers Rust (axum/SeaORM) **sans changer le contrat HTTP** : mêmes routes, mêmes codes de réponse, mêmes messages d'erreur en français, même format JSON ; l'interface `/admin/` et le lecteur `/player/` n'ont pas été modifiés. Les modules suivent l'ancien paquet `app/` (`config`, `db`, `models`, `schemas`, `auth`, `audit`, `deps`, `ratelimit`, `security`, `storage`, `publishing`, `api`).
+
+- **Données existantes** : mêmes noms de tables et de colonnes, mêmes types ; les hachés de mots de passe (`pbkdf2_sha256$…`) sont compatibles (vérifié par un test sur un vecteur produit par `hashlib`). La reprise d'une base existante (SQLite ou PostgreSQL) n'a **pas encore été validée sur de vraies données** : sauvegardez d'abord (voir « Sauvegardes ») et essayez sur une copie.
+- **Supprimé** : `/docs`, `/redoc`, `/openapi.json` (pas de génération automatique de schéma) ; `UVICORN_WORKERS` (inutile).
+- **Ajouté** : `TTSCREEN_HOST`, `TTSCREEN_PORT`, `RUST_LOG`, sous-commande `ttscreen healthcheck` (sonde Docker sans curl/python), arrêt propre sur SIGTERM, `Cache-Control: immutable` sur `/files/`, détection d'envois identiques simultanés sans erreur 500.
+- **Tests** : les scénarios des 39 tests pytest sont repris (mêmes assertions) (`backend/tests/api.rs`, `security.rs`) et complétés par des tests unitaires par module et des tests par fonctionnalité (`features.rs`).
 
 ---
 
@@ -97,7 +112,7 @@ Dans tous les cas, l'API démarre sur `http://127.0.0.1:8000` et l'interface est
    mkdir -p ~/.config/nix
    echo 'experimental-features = nix-command flakes' >> ~/.config/nix/nix.conf
    ```
-2. **Entrer dans l'environnement de développement** (Python, Node, Docker Compose, Caddy, ffmpeg) :
+2. **Entrer dans l'environnement de développement** (Rust, Node, Docker Compose, Caddy, ffmpeg) :
    ```bash
    git clone https://github.com/Michalex37220/TTScreen.git && cd TTScreen
    nix develop          # le flake doit être suivi par git : git add flake.nix
@@ -114,27 +129,22 @@ Pour utiliser Docker sur NixOS, activez le démon : `virtualisation.docker.enabl
 
 ### Hors NixOS (Linux, macOS, Windows/WSL)
 
-Prérequis : **Python 3.11 ou plus récent** et git.
+Prérequis : **Rust stable récent** (installé via [rustup](https://rustup.rs), 1.80 ou plus) et git. Aucun serveur de base de données n'est nécessaire en développement (SQLite embarqué).
 
 ```bash
 git clone https://github.com/Michalex37220/TTScreen.git && cd TTScreen
 cp .env.example .env
 # Définissez TTSCREEN_ADMIN_TOKEN dans .env (24 car. min.) :
-python3 -c "import secrets; print(secrets.token_urlsafe(32))"
+openssl rand -base64 32 | tr "+/" "-_" | tr -d "="
 
 cd backend
-python3 -m venv .venv
-. .venv/bin/activate                      # Windows (PowerShell) : .venv\Scripts\Activate.ps1
-pip install -r requirements.txt           # dépendances d'exécution épinglées
-pip install -r requirements-dev.txt       # outils de test (pytest, httpx) — dev uniquement
-
-python -m pytest -q                       # tests (certains peuvent déclencher des warnings ce qui est normal)
-python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+cargo test                                # tests automatisés (unitaires + intégration)
+cargo run                                 # démarre l'API sur http://127.0.0.1:8000
 ```
 
 Lancez ces commandes **depuis le dossier `backend/`** : les chemins `./data/...` sont relatifs au dossier de lancement, donc la base et les médias sont créés dans `backend/data/` (ignoré par Git). Pour les déplacer, renseignez des chemins absolus dans `TTSCREEN_DATABASE_URL` et `TTSCREEN_MEDIA_DIR`. Sous Windows natif, préférez WSL.
 
-Sur Linux/macOS, `./scripts/dev.sh` et `./scripts/test.sh` fonctionnent aussi, une fois le venv activé. `dev.sh` génère automatiquement un jeton admin aléatoire pour la session si `TTSCREEN_ADMIN_TOKEN` n'est pas défini.
+Sur Linux/macOS, `./scripts/dev.sh` et `./scripts/test.sh` font la même chose. `dev.sh` génère automatiquement un jeton admin aléatoire pour la session si `TTSCREEN_ADMIN_TOKEN` n'est pas défini, et relance l'API à chaque modification si `cargo-watch` est installé (`cargo install cargo-watch`). Pour un binaire optimisé : `cargo build --release` (résultat : `backend/target/release/ttscreen`).
 
 ### Docker
 
@@ -142,7 +152,7 @@ Essai local avec SQLite (accessible seulement depuis votre machine) :
 
 ```bash
 # TTSCREEN_ADMIN_TOKEN est obligatoire (plus de valeur par défaut) :
-export TTSCREEN_ADMIN_TOKEN="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
+export TTSCREEN_ADMIN_TOKEN="$(openssl rand -base64 32 | tr '+/' '-_' | tr -d '=')"
 docker compose -f deploy/docker-compose.yml up --build
 ```
 
@@ -156,10 +166,10 @@ Puis ouvrez <http://127.0.0.1:8000> et connectez-vous avec la valeur de `TTSCREE
 | `TTSCREEN_LEGACY_TOKEN_ALWAYS` | `false` | `true` = le jeton admin historique reste accepté même après la création d'un compte admin nommé. |
 | `TTSCREEN_BOOTSTRAP_ADMIN_USER` / `TTSCREEN_BOOTSTRAP_ADMIN_PASSWORD` | vide | Si renseignés, créent un compte admin nommé au démarrage **uniquement si aucun admin n'existe**. Un compte existant n'est jamais modifié au redémarrage. |
 | `TTSCREEN_BOOTSTRAP_ADMIN_RESET` | `false` | `true` = réinitialise explicitement le compte d'amorçage (mot de passe, rôle, état actif) — utile pour récupérer l'accès. À retirer ensuite. |
-| `TTSCREEN_DATABASE_URL` | `sqlite:///./data/ttscreen.db` | Base de données. PostgreSQL : `postgresql+psycopg://utilisateur:mdp@hôte:5432/base`. |
+| `TTSCREEN_DATABASE_URL` | `sqlite:///./data/ttscreen.db` | Base de données. PostgreSQL : `postgresql://utilisateur:mdp@hôte:5432/base` (le préfixe `postgresql+psycopg://` de la version Python est aussi accepté). |
 | `TTSCREEN_MEDIA_DIR` | `./data/media` | Dossier de stockage des médias. |
 | `TTSCREEN_MAX_UPLOAD_MB` | `200` | Taille maximale d'un fichier téléversé (contrôlée avant lecture du corps). |
-| `TTSCREEN_ENV` | `development` | Mettre `production` pour couper `/docs`, `/redoc`, `/openapi.json` et exiger un moyen de connexion. |
+| `TTSCREEN_ENV` | `development` | Mettre `production` pour exiger un moyen de connexion au démarrage. |
 | `TTSCREEN_SESSION_TTL_H` | `12` | Durée de validité d'une session utilisateur, en heures. |
 | `TTSCREEN_RATE_WINDOW_S` | `60` | Taille de la fenêtre glissante de limitation de débit, en secondes. |
 | `TTSCREEN_RATE_LIMIT_API` | `600` | Requêtes / fenêtre / IP sur le reste de `/api` (`0` = illimité). |
@@ -168,9 +178,13 @@ Puis ouvrez <http://127.0.0.1:8000> et connectez-vous avec la valeur de `TTSCREE
 | `TTSCREEN_RATE_LIMIT_AUTHFAIL` | `20` | Jetons Bearer invalides / fenêtre / IP avant blocage 429, sur **toutes** les routes. |
 | `TTSCREEN_RATE_LIMIT_LOGIN_USER` | `10` | Échecs de connexion / fenêtre / **identifiant** avant blocage 429. |
 | `TTSCREEN_FRONTEND_DIR` / `TTSCREEN_PLAYER_DIR` | dossiers du dépôt | Emplacement de l'interface et du lecteur (utile en conteneur). |
-| `UVICORN_WORKERS` | `1` | Nombre de processus dans le conteneur. 1 suffit largement pour 20 écrans. |
+| `TTSCREEN_HOST` / `TTSCREEN_PORT` | `127.0.0.1` / `8000` | Adresse d'écoute (l'image Docker fixe `0.0.0.0`). *Ajout du port Rust.* |
+| `FORWARDED_ALLOW_IPS` | `127.0.0.1` | Adresses ou réseaux (`10.0.0.0/8`) dont l'en-tête `X-Forwarded-For` est cru ; `*` = tous. Remplace l'option `--forwarded-allow-ips` d'uvicorn. |
+| `TTSCREEN_TIMEZONE` | `Europe/Paris` | Fuseau horaire (nom IANA) dans lequel les plannings sont interprétés. Une valeur invalide empêche le démarrage. |
+| `RUST_LOG` | `info` | Niveau de journalisation (`debug`, `warn`…). *Ajout du port Rust.* |
+| ~~`UVICORN_WORKERS`~~ | — | Supprimée : un seul processus Rust exploite tous les cœurs. |
 
-Générer un jeton solide : `python3 -c "import secrets; print(secrets.token_urlsafe(32))"`. Ne commitez jamais `.env` (il est dans `.gitignore`).
+Générer un jeton solide : `openssl rand -base64 32 | tr "+/" "-_" | tr -d "="`. Ne commitez jamais `.env` (il est dans `.gitignore`).
 
 ---
 
@@ -194,10 +208,28 @@ Ouvrez <http://127.0.0.1:8000/> et connectez-vous avec un **compte utilisateur**
 7. Dans **Versions publiées** : **Prévisualiser** pour tester, puis choisissez un écran et **Diffuser**.
 
 **Écrans**
-1. Saisissez un nom et cliquez sur **Créer l'écran**.
+1. Saisissez un nom (et, si vous voulez, un groupe) puis cliquez sur **Créer l'écran**.
 2. **Copiez le jeton affiché : il ne l'est qu'une fois.** L'adresse à ouvrir sur l'écran est donnée avec.
-3. Choisissez la version à diffuser et cliquez sur **Affecter**.
-4. **Voir l'écran** affiche exactement ce que voit l'écran. **Nouveau jeton** et **Révoquer** gèrent l'accès.
+3. Chaque écran indique **ce qu'il affiche actuellement et pourquoi** (contenu propre, groupe, planning). Choisissez un **contenu propre** et cliquez sur **Affecter** pour qu'il l'emporte sur celui du groupe.
+4. **Renommer**, **Déplacer** (changer de groupe), **Planning**, **Voir l'écran** (aperçu exact), **Nouveau jeton**, **Révoquer** et **Supprimer** complètent la ligne.
+
+**Groupes**
+1. Onglet **Groupes** : donnez un nom et cliquez sur **Créer le groupe**.
+2. Ajoutez des écrans avec **Ajouter au groupe** (ou choisissez le groupe à la création d'un écran).
+3. Choisissez une version et cliquez sur **Affecter** : **tous les écrans du groupe** l'affichent. Depuis un brouillon publié, le bouton **Diffuser** de l'onglet Playlists propose aussi les groupes.
+4. Supprimer un groupe ne supprime pas ses écrans : ils perdent seulement le contenu hérité.
+
+**Priorité du contenu** (du plus précis au plus général) : planning de l'écran › contenu propre de l'écran › planning du groupe › contenu du groupe. Un écran qui a son propre contenu n'est donc pas affecté par les changements du groupe ; retirez son contenu propre (« — aucun — » puis **Affecter**) pour qu'il suive de nouveau le groupe.
+
+**Planning** (bouton **Planning** d'un écran ou d'un groupe)
+- Une règle = une version, des jours de la semaine et une plage horaire (début inclus, fin exclue ; « jusqu'à minuit » pour 24:00). Pour traverser minuit, créez deux règles.
+- Hors des plages, l'écran revient à son contenu habituel. Si plusieurs règles se chevauchent, la plus récente l'emporte.
+- Les heures sont celles du **fuseau du serveur** (`TTSCREEN_TIMEZONE`, par défaut `Europe/Paris`), heure d'été comprise.
+- Le lecteur interroge le serveur toutes les 10 secondes : le changement de contenu est effectif en moins d'une minute, sans coupure.
+
+**Tableau de bord** : écrans connectés, écrans sans contenu (à surveiller), nombre de groupes, playlists, règles de planning et espace occupé par les médias.
+
+**Mon mot de passe** (en haut à droite, comptes nommés) : exige l'ancien mot de passe et déconnecte vos autres sessions.
 
 **Comptes** (onglet réservé au rôle admin)
 - Créez des comptes avec un rôle : **viewer** (lecture seule), **editor** (contenu, publication, écrans), **admin** (tout, y compris cette page). Les noms `legacy-admin` et `anonyme` sont réservés.
@@ -276,7 +308,7 @@ Activation : `systemctl --user enable --now ttscreen.service`. Ne laissez pas le
 
 ## Référence de l'API
 
-Documentation interactive générée automatiquement : **`/docs`** (Swagger) et **`/openapi.json`** — disponibles en développement, **désactivées en production** (`TTSCREEN_ENV=production`). Les messages d'erreur sont en français.
+Le port Rust n'embarque pas de Swagger : cette section fait foi (`/docs`, `/redoc` et `/openapi.json` n'existent pas). Les messages d'erreur sont en français.
 
 #### Authentification
 
@@ -366,6 +398,19 @@ Ou, pour le jeton admin historique (champ identifiant vide côté interface, tan
 ```
 
 Renvoie les entrées les plus récentes d'abord : `created_at`, `username`, `role`, `action`, `target`, `detail`, `ip`. Inclut désormais les connexions échouées, les jetons invalides (`auth_echouee`) et les accès refusés (`acces_refuse`).
+
+#### Changer son propre mot de passe
+
+```http
+  POST /api/auth/password
+```
+
+| Parameter          | Type     | Description                                            |
+| :----------------- | :------- | :----------------------------------------------------- |
+| `current_password` | `string` | **Required**. Mot de passe actuel                      |
+| `new_password`     | `string` | **Required**. Nouveau mot de passe (8 à 255 caractères) |
+
+`204` en cas de succès ; les **autres** sessions du compte sont révoquées. `403` si le mot de passe actuel est faux (les échecs comptent dans le quota de connexion par identifiant : `429` au-delà). `400` avec le jeton admin historique (pas de mot de passe).
 
 ### Médias
 
@@ -487,6 +532,14 @@ curl -H "$A" -X PUT -H 'Content-Type: application/json' $U/api/playlists/1/items
 
 Renvoie l'état enregistré de la playlist au [format manifeste](#format-du-manifeste), sans rien publier. `version_id` et `number` valent `null`.
 
+#### Dupliquer une playlist
+
+```http
+  POST /api/playlists/${id}/duplicate
+```
+
+Rôle editor. Crée « Copie de … » avec les mêmes éléments (sans aucune version) et renvoie `201` avec la nouvelle playlist.
+
 ### Publication et versions
 
 #### Publier une version
@@ -519,67 +572,65 @@ Contenu exact de la version, au [format manifeste](#format-du-manifeste).
 
 ### Écrans
 
-#### Créer un écran
-
-```http
-  POST /api/screens
-```
-
-| Parameter       | Type     | Description                                          |
-| :-------------- | :------- | :--------------------------------------------------- |
-| `name`          | `string` | **Required**. Nom de l'écran (1 à 120 caractères)    |
-
-Renvoie `201` avec l'écran et son **`token`, affiché une seule fois** :
+Un écran a la forme :
 
 ```json
-{ "id": 2, "name": "Entrée", "version_id": null, "online": false,
-  "last_seen": null, "has_token": true, "token": "dX1qW1K_…" }
+{ "id": 2, "name": "Entrée", "version_id": null, "online": true, "last_seen": "2026-03-02T09:00:01",
+  "has_token": true, "group_id": 1, "group_name": "Hall",
+  "effective_version_id": 7, "effective_source": "group" }
 ```
 
-#### Lister les écrans
+- `version_id` : contenu **propre** de l'écran (prioritaire sur le groupe).
+- `effective_version_id` / `effective_source` : ce que l'écran affiche **à cet instant** ; source : `screen_schedule`, `screen`, `group_schedule`, `group` ou `null` (rien).
+- `online` vaut `true` si le lecteur a interrogé le serveur dans les 60 dernières secondes ; `last_seen` est en UTC.
+
+| Requête | Rôle | Description |
+| :------ | :--- | :---------- |
+| `POST /api/screens` | editor | Corps `{"name", "group_id"?}` (`name` 1 à 120 caractères). `201` avec l'écran et son **`token`, affiché une seule fois**. `404` si le groupe n'existe pas. |
+| `GET /api/screens` | viewer | Liste des écrans. |
+| `PUT /api/screens/${id}` | editor | Renomme : `{"name"}`. |
+| `DELETE /api/screens/${id}` | editor | Supprime l'écran et ses règles de planning ; son jeton cesse de fonctionner. `204`. |
+| `POST /api/screens/${id}/group` | editor | `{"group_id": 3}` place l'écran dans un groupe, `{"group_id": null}` l'en sort. Champ obligatoire. |
+| `POST /api/screens/${id}/assign` | editor | `{"version_id": 5}` fixe un contenu propre ; `null` le retire (l'écran suit alors son groupe). Revenir en arrière = affecter une ancienne version. |
+| `GET /api/screens/${id}/manifest` | viewer | Ce que voit l'écran à cet instant (groupe et planning compris), au [format manifeste](#format-du-manifeste), **sans** le marquer connecté. `404` si rien à afficher. |
+| `POST /api/screens/${id}/rotate-token` | editor | Nouveau jeton (renvoyé une seule fois) ; l'ancien cesse de fonctionner immédiatement. |
+| `POST /api/screens/${id}/revoke-token` | editor | L'écran ne peut plus se connecter ; pour le réactiver, générez un nouveau jeton. |
+
+Identifiants : entiers de 1 à 2³¹−1 (sinon `422`).
+
+### Groupes d'écrans
+
+Un groupe : `{"id", "name", "version_id", "screen_count"}`. Le nom est unique (`409` sinon).
+
+| Requête | Rôle | Description |
+| :------ | :--- | :---------- |
+| `GET /api/groups` | viewer | Liste, triée par nom. |
+| `POST /api/groups` | editor | `{"name"}` (1 à 120 caractères). `201`. |
+| `PUT /api/groups/${id}` | editor | Renomme : `{"name"}`. |
+| `POST /api/groups/${id}/assign` | editor | `{"version_id": 5 \| null}` : version diffusée sur tout le groupe. Les écrans qui ont un contenu propre ou un planning actif la gardent. |
+| `DELETE /api/groups/${id}` | editor | Supprime le groupe et ses règles de planning ; ses écrans sont conservés (sans groupe). `204`. |
+
+Supprimer une playlist est refusé (`409`) si l'une de ses versions est affectée à un écran, à un groupe ou utilisée dans un planning.
+
+### Planning
+
+Une règle : `{"id", "screen_id", "group_id", "version_id", "days", "start", "end", "created_at"}` ; exactement l'un de `screen_id` / `group_id` est renseigné. `days` : liste de 0 (lundi) à 6 (dimanche). `start` / `end` : `HH:MM` en heure du fuseau du serveur ; `end` peut valoir `24:00` ; `end` doit être postérieure à `start`.
+
+| Requête | Rôle | Description |
+| :------ | :--- | :---------- |
+| `GET /api/schedules` | viewer | Toutes les règles. |
+| `POST /api/schedules` | editor | `{"screen_id" \| "group_id", "version_id", "days", "start", "end"}`. `201`. `404` si la cible ou la version n'existe pas, `409` au-delà de 100 règles par cible. |
+| `DELETE /api/schedules/${id}` | editor | `204`. |
+
+Priorité du contenu d'un écran : planning de l'écran › contenu propre › planning du groupe › contenu du groupe ; si plusieurs règles d'une même cible sont actives, la plus récente l'emporte.
+
+### Tableau de bord
 
 ```http
-  GET /api/screens
+  GET /api/stats
 ```
 
-Chaque écran a la forme `{"id", "name", "version_id", "online", "last_seen", "has_token"}`. `online` vaut `true` si le lecteur a interrogé le serveur dans les 60 dernières secondes ; `last_seen` est en UTC.
-
-#### Affecter une version à un écran
-
-```http
-  POST /api/screens/${id}/assign
-```
-
-| Parameter       | Type              | Description                                                           |
-| :-------------- | :---------------- | :-------------------------------------------------------------------- |
-| `id`            | `integer`         | **Required**. Identifiant de l'écran (1 à 2³¹−1)                     |
-| `version_id`    | `integer \| null` | **Required**. Version à diffuser (1 à 2³¹−1) ; `null` retire l'affectation (corps JSON) |
-
-Revenir en arrière = affecter une ancienne version.
-
-#### Voir ce que voit un écran
-
-```http
-  GET /api/screens/${id}/manifest
-```
-
-Renvoie la version affectée au [format manifeste](#format-du-manifeste), **sans** marquer l'écran comme connecté. `404` si rien n'est affecté.
-
-#### Générer un nouveau jeton d'écran
-
-```http
-  POST /api/screens/${id}/rotate-token
-```
-
-L'ancien jeton cesse de fonctionner immédiatement. Le nouveau est renvoyé dans le champ `token`, une seule fois.
-
-#### Révoquer le jeton d'un écran
-
-```http
-  POST /api/screens/${id}/revoke-token
-```
-
-L'écran ne peut plus se connecter. Pour le réactiver, générez un nouveau jeton.
+Rôle viewer. Renvoie `{"screens": {"total", "online", "offline", "without_content"}, "groups", "playlists", "versions", "schedules", "media": {"count", "bytes"}}`.
 
 ### Lecteur
 
@@ -644,57 +695,41 @@ Un seul mode à la fois, par exemple `/player/#token=dX1q…`. Les valeurs du fr
 
 ## Déploiement en production
 
-Architecture : **Caddy** (HTTPS automatique, sert directement les médias, borne les corps : 1 Mo partout sauf 210 Mo sur `POST /api/media`) → **API** (conteneur Alpine, lecture seule, sans privilèges, port non publié) → **PostgreSQL**. Seuls les ports 80 et 443 sont exposés.
+> **Guide complet pas à pas : [`docs/DEPLOIEMENT.md`](docs/DEPLOIEMENT.md)** (préparation du serveur, pare-feu, sauvegardes planifiées, mise à jour, retour arrière, installation sans Docker, dépannage).
 
-1. Faites pointer le DNS de votre domaine vers l'adresse du serveur et ouvrez les ports 80 et 443.
-2. Installez Docker et Docker Compose, puis récupérez le dépôt.
-3. Configurez les secrets (ils ne doivent jamais être dans Git) :
-   ```bash
-   cp deploy/.env.example deploy/.env
-   python3 -c "import secrets; print(secrets.token_urlsafe(32))"   # à lancer deux fois
-   nano deploy/.env      # DOMAIN, POSTGRES_PASSWORD, et AU MOINS UN des deux :
-                          #  - TTSCREEN_ADMIN_TOKEN (24 car. min. variés)
-                          #  - TTSCREEN_BOOTSTRAP_ADMIN_USER + TTSCREEN_BOOTSTRAP_ADMIN_PASSWORD (recommandé)
-   ```
-   Le compte d'amorçage n'est créé que s'il n'existe aucun admin ; retirez `TTSCREEN_BOOTSTRAP_ADMIN_PASSWORD` du fichier une fois le compte créé.
-4. Démarrez :
-   ```bash
-   docker compose -f deploy/docker-compose.prod.yml up -d --build
-   docker compose -f deploy/docker-compose.prod.yml logs -f
-   ```
-5. Ouvrez `https://VOTRE-DOMAINE/` et connectez-vous avec le compte d'amorçage (ou le jeton historique tant qu'aucun admin nommé n'existe).
+Architecture : **Caddy** (HTTPS automatique, sert directement les médias, borne les corps : 1 Mo partout sauf 210 Mo sur `POST /api/media`) → **API Rust** (conteneur Alpine, lecture seule, sans privilèges, port non publié) → **PostgreSQL** (non publié). Seuls les ports 80 et 443 sont exposés. Journaux avec rotation, limites mémoire, vérifications de santé et ordre de démarrage sont déjà configurés dans `deploy/docker-compose.prod.yml`.
+
+Résumé :
+
+```bash
+git clone https://github.com/Michalex37220/TTScreen.git && cd TTScreen
+cp deploy/.env.example deploy/.env && chmod 600 deploy/.env
+nano deploy/.env                 # DOMAIN, POSTGRES_PASSWORD, et un compte d'amorçage (ou un jeton admin)
+./scripts/deploy.sh              # vérifie la configuration, construit, démarre, teste le HTTPS
+```
+
+`./scripts/deploy.sh` refuse de démarrer si la configuration est dangereuse ou incomplète (domaine d'exemple, mot de passe de base trop court ou contenant des caractères qui casseraient l'URL, jeton faible, compte d'amorçage incomplet). Sur un petit serveur (≤ 2 Go de RAM), la compilation Rust peut manquer de mémoire : construisez l'image sur votre poste avec `./scripts/ship-image.sh utilisateur@serveur`.
 
 En production (`TTSCREEN_ENV=production`) :
 - l'API **refuse de démarrer** si `TTSCREEN_ADMIN_TOKEN` est renseigné mais fait moins de 24 caractères ou est trop répétitif, et **exige au moins un moyen de connexion** (jeton ou compte d'amorçage) ;
-- `/docs`, `/redoc` et `/openapi.json` sont désactivés ;
 - Caddy transmet `X-Forwarded-For` de confiance (`FORWARDED_ALLOW_IPS="*"`, l'API n'étant pas publiée) pour que la limitation de débit voie la vraie IP des clients.
 
-Sur le serveur, ne publiez pas le port 8000 : l'API n'est joignable que par Caddy. Validez le Caddyfile avant déploiement : `caddy validate --config deploy/Caddyfile`.
+Ne publiez jamais le port 8000 ni celui de PostgreSQL. Validez le Caddyfile avant déploiement : `caddy validate --config deploy/Caddyfile`.
 
 > Après un `git pull` sur une installation existante, lancez **une fois** `./scripts/untrack-generated-files.sh` puis committez, afin de retirer secrets, base SQLite et artefacts du suivi Git. Si un secret réel a déjà été commité, changez-le : l'historique Git le conserve.
 
 ## Sauvegardes et mises à jour
 
-**Sauvegarde** (base PostgreSQL + médias dans `./backups`, rotation sur 14 jours) :
-```bash
-./scripts/backup.sh
-```
-À planifier par exemple avec cron : `0 3 * * * cd /chemin/TTScreen && ./scripts/backup.sh`. Copiez aussi les sauvegardes **hors du serveur**.
+| Action | Commande |
+|---|---|
+| Sauvegarde (base + médias, vérifiée, rotation 14 jours) | `./scripts/backup.sh` |
+| Sauvegarde copiée hors serveur | `BACKUP_REMOTE=utilisateur@hôte:/chemin/ ./scripts/backup.sh` |
+| Planification quotidienne | timer systemd fourni : `deploy/systemd/ttscreen-backup.timer` |
+| Restauration (destructive, confirmation demandée) | `./scripts/restore.sh backups/db-….sql.gz [backups/media-….tgz]` |
+| Mise à jour (sauvegarde + `git pull` + redéploiement) | `./scripts/update.sh` |
+| Retour à la version précédente | `./scripts/rollback.sh` |
 
-**Restauration** de la base : 
-```bash
-gunzip -c backups/db-AAAA-MM-JJ-HHMM.sql.gz | docker compose -f deploy/docker-compose.prod.yml exec -T db psql -U ttscreen ttscreen
-```
-
-. Pour les médias, extrayez l'archive `.tgz` dans le volume `ttscreen_media`. Testez une restauration avant d'en avoir besoin.
-
-**Mise à jour** :
-```bash
-git pull
-./scripts/backup.sh
-docker compose -f deploy/docker-compose.prod.yml up -d --build
-```
-Il n'y a pas encore de migrations automatiques du schéma : lisez les notes de version (et `docs/SECURITY_PATCH.md`) avant de mettre à jour.
+Une sauvegarde qui reste sur le même disque ne protège pas d'une panne du serveur : configurez `BACKUP_REMOTE` et **testez une restauration** avant d'en avoir besoin. Il n'y a pas encore de migrations automatiques du schéma : lisez les notes de version (et `docs/SECURITY_PATCH.md`) avant de mettre à jour.
 
 ## Sécurité
 
@@ -707,15 +742,15 @@ Déjà en place :
 - **Amorçage sans écrasement** : le compte `TTSCREEN_BOOTSTRAP_ADMIN_*` n'est créé que s'il n'existe aucun admin ; un redémarrage ne modifie jamais un compte existant. `TTSCREEN_BOOTSTRAP_ADMIN_RESET=true` pour réinitialiser explicitement (récupération d'accès).
 - **Journal d'audit transactionnel** : connexions réussies/échouées, jetons invalides (`auth_echouee`), accès refusés (`acces_refuse`), publications, affectations, gestion des écrans et des comptes… tracés avec auteur, date et IP, dans la même transaction que l'opération (`GET /api/audit`).
 - **Limitation de débit renforcée** : fenêtre glissante par IP sur l'API, par jeton d'écran **et** par IP sur `/api/player/manifest`, limite stricte sur les connexions par IP **et par identifiant**, et comptage des jetons Bearer invalides par IP sur **toutes** les routes. `429` + `Retry-After` au-delà.
-- **Envoi de médias pré-authentifié** : rôle editor exigé et `Content-Length` borné **avant** toute lecture du corps (garde ASGI) ; Caddy limite les corps à 1 Mo partout, 210 Mo seulement sur `POST /api/media`.
+- **Envoi de médias pré-authentifié** : rôle editor exigé et `Content-Length` borné **avant** toute lecture du corps (middleware `upload_guard`) ; Caddy limite les corps à 1 Mo partout, 210 Mo seulement sur `POST /api/media`.
 - **Médias servis de façon restreinte** : `/files/` n'accepte que les noms `<sha256>.<ext>` (application et Caddy), cache immuable, CSP `default-src 'none'`.
-- **En-têtes de sécurité** : CSP stricte, `X-Content-Type-Options: nosniff`, `X-Frame-Options: SAMEORIGIN`, `Referrer-Policy: no-referrer`, `Cross-Origin-Resource-Policy: same-origin`. `/docs` coupé en production.
+- **En-têtes de sécurité** : CSP stricte, `X-Content-Type-Options: nosniff`, `X-Frame-Options: SAMEORIGIN`, `Referrer-Policy: no-referrer`, `Cross-Origin-Resource-Policy: same-origin`.
 - **Jeton distinct par écran**, haché en base, renouvelable et révocable.
-- **Données sensibles hors Git** : `.gitignore` (`.env`, `backend/data/`, `*.db`, médias, caches), script `scripts/untrack-generated-files.sh`, dépendances d'exécution épinglées (`requirements.txt`), outils de test séparés (`requirements-dev.txt`).
-- **Conteneur API sans privilèges**, en lecture seule ; HTTPS via Caddy ; IP client fiable derrière le proxy (`--forwarded-allow-ips` configurable).
+- **Données sensibles hors Git** : `.gitignore` (`.env`, `backend/data/`, `*.db`, médias, caches), script `scripts/untrack-generated-files.sh`, dépendances verrouillées (`Cargo.lock`), outils de test séparés (`[dev-dependencies]`, absents du binaire livré).
+- **Conteneur API sans privilèges**, en lecture seule ; HTTPS via Caddy ; IP client fiable derrière le proxy (`FORWARDED_ALLOW_IPS` configurable).
 
 Limites actuelles, à connaître :
-- La limitation de débit est **en mémoire** (un seul processus uvicorn) ; prévoir un compteur partagé (Redis) si vous passez à plusieurs workers.
+- La limitation de débit est **en mémoire** (un seul processus) ; prévoir un compteur partagé (Redis) si vous déployez plusieurs instances derrière un répartiteur.
 - Les médias sous `/files/` sont lisibles sans authentification (noms non devinables). Des URL signées sont prévues.
 - Le jeton de session saisi dans l'interface est conservé dans le `sessionStorage` du navigateur (effacé à la fermeture de l'onglet, pas de cookie httpOnly) ; la CSP réduit le risque d'XSS mais ne l'élimine pas.
 - Aucun verrouillage de compte long terme : le blocage par identifiant dure une fenêtre (60 s).
@@ -730,14 +765,14 @@ Les contributions sont les bienvenues : correctifs, tests, traductions, document
 
 1. **Discutez d'abord** : ouvrez un ticket (bug ou proposition) avant un gros changement.
 2. **Forkez** le dépôt et créez une branche : `git checkout -b ma-fonctionnalite`.
-3. **Installez l'environnement** ([NixOS](#nixos) ou [hors NixOS](#hors-nixos-linux-macos-windowswsl)). Côté dépendances : `pip install -r backend/requirements.txt` pour l'exécution, `pip install -r backend/requirements-dev.txt` pour les tests.
-4. **Écrivez le code et ses tests** : toute fonctionnalité doit avoir des tests automatisés dans `backend/tests/` (y compris un test d'authentification pour tout nouvel endpoint d'administration). Lancez-les avec `./scripts/test.sh` (ou `python -m pytest -q` depuis `backend/`). Une fonctionnalité sans test passant n'est pas considérée comme terminée.
+3. **Installez l'environnement** ([NixOS](#nixos) ou [hors NixOS](#hors-nixos-linux-macos-windowswsl)). Côté dépendances : tout passe par `cargo` (`backend/Cargo.toml`).
+4. **Écrivez le code et ses tests** : toute fonctionnalité doit avoir des tests automatisés dans `backend/tests/` (y compris un test d'authentification pour tout nouvel endpoint d'administration). Lancez-les avec `./scripts/test.sh` (ou `cargo test` depuis `backend/`) ; `cargo clippy --all-targets` et `cargo fmt --check` doivent aussi passer. Une fonctionnalité sans test passant n'est pas considérée comme terminée.
 5. **Vérifiez à la main** dans le navigateur : interface `/admin/`, prévisualisation, lecteur.
 6. **Commitez** avec des messages clairs (une idée par commit), puis ouvrez une **demande de merge** qui décrit le problème, la solution et comment la tester.
 
 Conventions :
 - Aucun secret, jeton, mot de passe ni fichier `.env` dans Git (voir `.gitignore`).
-- Backend : Python typé, code et messages d'erreur destinés à l'utilisateur en français. Dépendances d'exécution épinglées dans `requirements.txt` ; ne mettez pas d'outils de test dedans.
+- Backend : Rust, code commenté et messages d'erreur destinés à l'utilisateur en français. Outils de test uniquement dans `[dev-dependencies]` ; commitez `Cargo.lock`.
 - Interface : pas d'injection de données dans le HTML (utilisez `textContent` ou les helpers existants), pas de dépendance externe chargée depuis un CDN.
 - Les endpoints d'administration doivent rester protégés ; tout nouvel endpoint s'accompagne d'un test d'authentification.
 

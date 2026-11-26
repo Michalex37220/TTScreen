@@ -1,0 +1,10 @@
+# Sauvegarde (installation Docker). Adaptez WorkingDirectory/ExecStart au dossier où le dépôt est cloné.
+[Unit]
+Description=Sauvegarde TTScreen (base + médias)
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/TTScreen
+ExecStart=/opt/TTScreen/scripts/backup.sh
+# Copie hors serveur (recommandé) : décommentez et adaptez
+# Environment=BACKUP_REMOTE=sauvegarde@autre-serveur:/srv/backups/ttscreen/

@@ -437,3 +437,68 @@ textarea
 {
   border-top:0;
 }
+
+/* ---- tableau de bord, groupes, planning ---- */
+.stats
+{
+  display:grid;
+  grid-template-columns:repeat(auto-fill,minmax(170px,1fr));
+  gap:12px;
+  margin-bottom:16px;
+}
+.stat
+{
+  background:var(--card);
+  border:1px solid var(--line);
+  border-radius:10px;
+  padding:14px 16px;
+}
+.stat-value
+{
+  font-size:26px;
+  font-weight:700;
+  line-height:1.2;
+}
+.stat.ok { border-color:var(--ok); }
+.stat.ok .stat-value { color:var(--ok); }
+.stat.warn { border-color:var(--warn); }
+.stat.warn .stat-value { color:var(--warn); }
+.chips
+{
+  flex-wrap:wrap;
+}
+.chip
+{
+  display:inline-flex;
+  align-items:center;
+  gap:6px;
+  padding:3px 4px 3px 10px;
+  border:1px solid var(--line);
+  border-radius:999px;
+  background:var(--bg);
+}
+.dot
+{
+  width:9px;
+  height:9px;
+  border-radius:50%;
+  display:inline-block;
+}
+.dot.ok { background:var(--ok); }
+.dot.off { background:var(--muted); }
+.row.days
+{
+  flex-wrap:wrap;
+}
+.day
+{
+  display:inline-flex;
+  align-items:center;
+  gap:4px;
+  cursor:pointer;
+}
+.modal h3
+{
+  margin:16px 0 6px;
+  font-size:15px;
+}

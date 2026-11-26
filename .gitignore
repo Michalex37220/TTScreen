@@ -16,3 +16,6 @@ backups/
 __pycache__/
 *.py[cod]
 .pytest_cache/
+
+# Rust
+target/

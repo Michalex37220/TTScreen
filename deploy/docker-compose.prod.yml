@@ -1,6 +1,14 @@
-# Production : PostgreSQL + API + Caddy (HTTPS automatique). Variables dans deploy/.env (jamais dans Git).
-# Voir le README pour l'architecture de la prod
+# Production : PostgreSQL + API (Rust) + Caddy (HTTPS automatique). Variables dans deploy/.env (jamais dans Git).
+# Guide complet : docs/DEPLOIEMENT.md  —  lancer avec ./scripts/deploy.sh (qui vérifie la configuration d'abord).
 name: TTscreen
+
+# Rotation des journaux : sans cela, les logs Docker grossissent sans limite et finissent par remplir le disque.
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   db:
     image: postgres:17-alpine
@@ -15,10 +23,19 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
+    # Jamais publié sur l'hôte : seul le service api (réseau interne Docker) peut l'atteindre
+    stop_grace_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+    logging: *logging
     restart: unless-stopped
 
   api:
     build: { context: .., dockerfile: deploy/Dockerfile }
+    # Image nommée : permet de la construire ailleurs (./scripts/ship-image.sh) et de revenir en arrière (./scripts/rollback.sh)
+    image: ttscreen-api:latest
     environment:
       TTSCREEN_ENV: production
       # Jeton historique facultatif si un compte d'amorçage est défini (l'API refuse de démarrer sans aucun des deux)
@@ -27,14 +44,18 @@ services:
       TTSCREEN_BOOTSTRAP_ADMIN_PASSWORD: ${TTSCREEN_BOOTSTRAP_ADMIN_PASSWORD:-}
       TTSCREEN_BOOTSTRAP_ADMIN_RESET: ${TTSCREEN_BOOTSTRAP_ADMIN_RESET:-}
       TTSCREEN_LEGACY_TOKEN_ALWAYS: ${TTSCREEN_LEGACY_TOKEN_ALWAYS:-}
+      TTSCREEN_MAX_UPLOAD_MB: ${TTSCREEN_MAX_UPLOAD_MB:-200}
       TTSCREEN_RATE_LIMIT_API: ${TTSCREEN_RATE_LIMIT_API:-600}
       TTSCREEN_RATE_LIMIT_PLAYER: ${TTSCREEN_RATE_LIMIT_PLAYER:-120}
       TTSCREEN_RATE_LIMIT_LOGIN: ${TTSCREEN_RATE_LIMIT_LOGIN:-20}
       TTSCREEN_SESSION_TTL_H: ${TTSCREEN_SESSION_TTL_H:-12}
+      # Fuseau dans lequel les plannings des écrans sont interprétés (nom IANA ; invalide = l'API refuse de démarrer)
+      TTSCREEN_TIMEZONE: ${TTSCREEN_TIMEZONE:-Europe/Paris}
+      RUST_LOG: ${RUST_LOG:-info}
       # Le port 8000 n'est joignable que par Caddy (expose, pas de ports:) : on peut lui faire confiance
       # pour X-Forwarded-For, sinon tous les clients apparaissent avec l'IP de Caddy (limites partagées)
       FORWARDED_ALLOW_IPS: "*"
-      TTSCREEN_DATABASE_URL: postgresql+psycopg://ttscreen:${POSTGRES_PASSWORD}@db:5432/ttscreen
+      TTSCREEN_DATABASE_URL: postgresql://ttscreen:${POSTGRES_PASSWORD}@db:5432/ttscreen
     volumes:
       - media:/data/media
     depends_on:
@@ -44,21 +65,38 @@ services:
     tmpfs: ["/tmp"]
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
+    pids_limit: 256
+    stop_grace_period: 20s
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+    logging: *logging
     restart: unless-stopped
 
   caddy:
     image: caddy:2-alpine
     environment:
       DOMAIN: ${DOMAIN:?définir DOMAIN dans deploy/.env}
+      UPLOAD_MAX_BODY: ${UPLOAD_MAX_BODY:-210MB}
     ports:
       - "80:80"
       - "443:443"
+      - "443:443/udp"   # HTTP/3 (facultatif : sans UDP 443, les navigateurs retombent sur HTTP/2)
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - media:/srv/media:ro
       - caddy_data:/data
       - caddy_config:/config
-    depends_on: [api]
+    # Caddy ne démarre que lorsque l'API répond (sinon erreurs 502 pendant le démarrage)
+    depends_on:
+      api: { condition: service_healthy }
+    security_opt: ["no-new-privileges:true"]
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+    logging: *logging
     restart: unless-stopped
 
 volumes:

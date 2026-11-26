@@ -11,10 +11,12 @@
       devShells = forAll (pkgs: {
         default = pkgs.mkShell {
           packages = [
-            (pkgs.python312.withPackages (ps: with ps; [
-              fastapi uvicorn sqlalchemy pydantic python-multipart
-              httpx pytest psycopg
-            ]))
+            pkgs.cargo
+            pkgs.rustc
+            pkgs.clippy
+            pkgs.rustfmt
+            pkgs.cargo-watch
+            pkgs.pkg-config
             pkgs.nodejs_22
             pkgs.docker-compose
             pkgs.caddy

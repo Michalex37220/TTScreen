@@ -1,0 +1,35 @@
+# Installation SANS Docker : Caddy installé sur la machine (https://caddyserver.com/docs/install).
+# À placer dans /etc/caddy/Caddyfile (remplacer tv.exemple.fr par votre domaine), puis : sudo systemctl reload caddy
+# Ici, l'API sert elle-même les médias (/files/) : pas besoin de partager le dossier avec Caddy.
+tv.exemple.fr {
+	encode zstd gzip
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=()"
+		-Server
+	}
+
+	@upload {
+		method POST
+		path /api/media
+	}
+	handle @upload {
+		request_body {
+			max_size 210MB
+		}
+		reverse_proxy 127.0.0.1:8000 {
+			transport http {
+				read_timeout 15m
+				write_timeout 15m
+			}
+		}
+	}
+
+	handle {
+		request_body {
+			max_size 1MB
+		}
+		reverse_proxy 127.0.0.1:8000
+	}
+}

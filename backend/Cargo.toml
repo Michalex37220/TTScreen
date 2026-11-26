@@ -1,0 +1,54 @@
+[package]
+name = "ttscreen"
+version = "0.1.0"
+edition = "2021"
+description = "TTscreen : système d'affichage dynamique (API en Rust)"
+license = "GPL-3.0-or-later"
+publish = false
+
+[lib]
+name = "ttscreen"
+path = "src/lib.rs"
+
+[[bin]]
+name = "ttscreen"
+path = "src/main.rs"
+
+# Dépendances d'exécution (image de production). Les outils de test sont dans [dev-dependencies]
+# et n'entrent jamais dans le binaire livré.
+[dependencies]
+axum = { version = "0.8", features = ["multipart"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "fs", "io-util", "net", "signal", "time"] }
+tower = { version = "0.5", features = ["util"] }
+tower-http = { version = "0.6", features = ["fs"] }
+# ORM : SQLite en développement, PostgreSQL en production (comme SQLAlchemy à l'origine)
+sea-orm = { version = "1", default-features = false, features = [
+    "sqlx-sqlite", "sqlx-postgres", "runtime-tokio-rustls", "macros", "with-chrono", "with-json",
+] }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+chrono = { version = "0.4", default-features = false, features = ["std", "clock", "serde"] }
+# Fuseaux horaires (planning des écrans : « du lundi au vendredi de 8 h à 18 h » en heure locale)
+chrono-tz = "0.10"
+# Cryptographie : PBKDF2-HMAC-SHA256 (même format de haché que la version Python), SHA-256, comparaison en temps constant
+sha2 = "0.10"
+pbkdf2 = "0.12"
+hex = "0.4"
+subtle = "2"
+rand = "0.8"
+base64 = "0.22"
+ipnet = "2"
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[dev-dependencies]
+tempfile = "3"
+toml = "0.8"
+futures-util = "0.3"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = true

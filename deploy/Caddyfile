@@ -6,8 +6,26 @@
 		X-Content-Type-Options nosniff
 		Referrer-Policy no-referrer
 		X-Frame-Options SAMEORIGIN
+		Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=()"
 		-Server
 	}
+
+	# Journal d'accès (sur la sortie standard, donc soumis à la rotation Docker).
+	# Caddy masque lui-même les en-têtes sensibles (Authorization, Cookie) dans ses journaux.
+	log {
+		output stdout
+		format json
+	}
+
+	# --- Restriction facultative de l'administration à certaines adresses -----------------------------
+	# Les écrans n'ont besoin que de /player/, /files/ et /api/player/manifest : l'interface /admin/ et le
+	# reste de /api peuvent être réservés à votre réseau. Décommentez et adaptez (exemples) :
+	#
+	# @admin_interdit {
+	# 	path /admin/* /api/auth/* /api/users* /api/audit* /api/playlists* /api/media* /api/screens* /api/versions*
+	# 	not remote_ip 203.0.113.0/24 2001:db8::/32
+	# }
+	# respond @admin_interdit "Accès réservé" 403
 
 	# Médias servis directement par Caddy (noms = SHA-256, donc cache immuable).
 	# Seuls les noms produits par l'application sont servis : ni dossier caché (.tmp = envois en cours),
@@ -25,23 +43,35 @@
 		}
 	}
 
-	# Gros corps (200 Mo) uniquement pour l'envoi de médias ; 1 Mo partout ailleurs, pour qu'un
+	# Gros corps (200 Mo + marge) uniquement pour l'envoi de médias ; 1 Mo partout ailleurs, pour qu'un
 	# client non authentifié ne puisse pas faire lire de gros corps sur les autres routes.
+	# Si vous changez TTSCREEN_MAX_UPLOAD_MB, adaptez UPLOAD_MAX_BODY dans deploy/.env (taille + ~5 %).
 	@upload {
 		method POST
 		path /api/media
 	}
 	handle @upload {
 		request_body {
-			max_size 210MB
+			max_size {$UPLOAD_MAX_BODY:210MB}
 		}
-		reverse_proxy api:8000
+		reverse_proxy api:8000 {
+			health_uri /api/health
+			health_interval 15s
+			# un envoi de 200 Mo sur une connexion lente peut durer longtemps
+			transport http {
+				read_timeout 15m
+				write_timeout 15m
+			}
+		}
 	}
 
 	handle {
 		request_body {
 			max_size 1MB
 		}
-		reverse_proxy api:8000
+		reverse_proxy api:8000 {
+			health_uri /api/health
+			health_interval 15s
+		}
 	}
 }

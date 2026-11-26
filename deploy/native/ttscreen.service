@@ -1,0 +1,45 @@
+# Installation SANS Docker : service systemd pour l'API TTScreen (binaire Rust).
+# Installation : voir docs/DEPLOIEMENT.md, section « Sans Docker ».
+#   sudo cp deploy/native/ttscreen.service /etc/systemd/system/ && sudo systemctl daemon-reload
+#   sudo systemctl enable --now ttscreen
+[Unit]
+Description=TTScreen (API d'affichage dynamique)
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ttscreen
+Group=ttscreen
+EnvironmentFile=/etc/ttscreen/ttscreen.env
+WorkingDirectory=/opt/ttscreen
+ExecStart=/opt/ttscreen/bin/ttscreen
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=20
+
+# --- Durcissement : le service ne peut écrire que dans /var/lib/ttscreen ---
+StateDirectory=ttscreen
+ReadWritePaths=/var/lib/ttscreen
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+AmbientCapabilities=
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
